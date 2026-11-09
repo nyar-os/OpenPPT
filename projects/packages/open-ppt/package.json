@@ -1,0 +1,42 @@
+{
+    "name": "@wae/open-ppt",
+    "version": "0.0.0",
+    "private": true,
+    "description": "Editable presentation decks: playback, visual editing and agent authoring on one deck model",
+    "license": "MPL-2.0",
+    "type": "module",
+    "engines": {
+        "node": ">=18"
+    },
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js"
+        }
+    },
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "typecheck": "tsc -p tsconfig.json --noEmit"
+    },
+    "keywords": [
+        "pptx",
+        "powerpoint",
+        "presentation",
+        "slides",
+        "wae"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/nyar-os/OpenPPT.git",
+        "directory": "packages/open-ppt"
+    },
+    "devDependencies": {
+        "@types/node": "^22.20.4",
+        "typescript": "^5.9.2"
+    }
+}
