@@ -46,5 +46,12 @@
     },
     "dependencies": {
         "@wae/commander": "0.0.7"
+    },
+    "optionalDependencies": {
+        "@wae/open-ppt-darwin-arm64": "workspace:*",
+        "@wae/open-ppt-darwin-x64": "workspace:*",
+        "@wae/open-ppt-linux-arm64": "workspace:*",
+        "@wae/open-ppt-linux-x64": "workspace:*",
+        "@wae/open-ppt-win32-x64": "workspace:*"
     }
 }

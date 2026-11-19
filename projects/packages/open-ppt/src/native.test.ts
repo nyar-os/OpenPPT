@@ -1,21 +1,28 @@
 /**
  * Native integration checks.
  *
- * These only run when `OPEN_PPT_NATIVE` points at a built addon; the default
- * scaffold has no binary, so the suite must not pretend one exists.
+ * These run only when an addon actually resolves: either the `OPEN_PPT_NATIVE`
+ * override or the installed `@wae/open-ppt-<platform>-<arch>` package.
  */
 
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
 import { isOpenPPTError } from './errors.js';
+import { nativeBinding } from './native.js';
 import { OpenPPT } from './open-ppt.js';
 
-const addon = process.env.OPEN_PPT_NATIVE;
-const skip = addon !== undefined && existsSync(addon) ? false : 'OPEN_PPT_NATIVE does not point at a built addon';
+const installed = (() => {
+    try {
+        return nativeBinding() !== undefined;
+    } catch {
+        return false;
+    }
+})();
+const skip = installed ? false : 'no native addon is resolvable';
 
 test('capabilities mirror the native matrix instead of a local guess', { skip }, async () => {
     const ppt = new OpenPPT();

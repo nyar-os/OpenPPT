@@ -8,14 +8,20 @@
  */
 
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
 import test from 'node:test';
 
 import { formatFromPath, formatInfo, OpenPPT, OpenPPTError, presentationFormats } from './index.js';
 import type { DeckInput } from './index.js';
+import { nativeBinding } from './native.js';
 
-const addon = process.env.OPEN_PPT_NATIVE;
-const withAddon = addon !== undefined && existsSync(addon) ? 'a built addon is installed' : false;
+const installed = (() => {
+    try {
+        return nativeBinding() !== undefined;
+    } catch {
+        return false;
+    }
+})();
+const withAddon = installed ? 'a built addon is installed' : false;
 
 test('session construction is synchronous and side-effect free', async () => {
     const ppt = new OpenPPT();

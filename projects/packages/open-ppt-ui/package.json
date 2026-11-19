@@ -1,9 +1,21 @@
 {
     "name": "@wae/open-ppt-ui",
-    "version": "0.0.0",
+    "version": "0.0.1",
     "description": "OpenPPT desktop and web UI built on VMZ",
-    "license": "Apache-2.0",
+    "license": "MPL-2.0",
     "private": true,
+    "type": "module",
+    "scripts": {
+        "check": "vmz check .",
+        "build": "vmz build . --profile static",
+        "serve": "vmz serve . --profile static"
+    },
+    "dependencies": {
+        "@vmz/core": "0.3.17"
+    },
+    "devDependencies": {
+        "@vmz/vmz": "0.3.17"
+    },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/nyar-os/OpenPPT.git",

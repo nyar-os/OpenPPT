@@ -23,9 +23,14 @@ export interface NativeBinding {
     deck_edit(handle: number, requestJson: string): string;
     deck_slide(handle: number, slideId: string): string;
     deck_assets(handle: number): string;
+    deck_asset(handle: number, assetId: string): string;
     deck_undo(handle: number): string;
     deck_redo(handle: number): string;
     deck_close(handle: number): boolean;
+    openGui(options?: { title?: string; contentDir?: string; width?: number; height?: number }): string;
+    pumpEvents(): string;
+    closeGui(): string;
+    isGuiOpen(): boolean;
 }
 
 let cached: NativeBinding | null | undefined;

@@ -6,7 +6,8 @@
             "create": "Create a native deck and save it to a project file",
             "open": "Open a project file and print its committed revision and slides",
             "inspect": "Run geometry and rule checks on a project file",
-            "play": "Walk the static show of a project file"
+            "play": "Walk the static show of a project file",
+            "gui": "Open the VMZ editor window on the native deck"
         },
         "opt": {
             "out": "Project file to write",

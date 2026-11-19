@@ -8,9 +8,9 @@ use std::collections::HashMap;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use document_presentation::authored::{
-    AssetId, ChartData, ChartElementInput, Deck, DeckEdit, DeckError, ElementId, Fill, FormulaElementInput, ImageElementInput,
-    LayoutId, Line, LockFlags, MediaKind, ShapeElementInput, SlideAddOptions, SlideId, TableCell, TableElementInput, TableRow,
-    TextContent, TextElementInput, Transform, codes,
+    AssetId, ChartData, ChartElementInput, Deck, DeckEdit, DeckError, Element, ElementContent, ElementId, Fill,
+    FormulaElementInput, ImageElementInput, LayoutId, Line, LockFlags, MediaKind, ShapeElementInput, SlideAddOptions, SlideId,
+    TableCell, TableElementInput, TableRow, TextContent, TextElementInput, Transform, codes,
 };
 use serde_json::{Value, json};
 
@@ -56,6 +56,8 @@ pub fn slide_detail(deck: &Deck, slide_id: &str) -> Result<Value, ServiceError> 
                 "transform": transform_value(element.transform),
                 "alt": element.alt,
                 "locked": element.lock.as_ref().is_some_and(|flags| flags.move_ || flags.resize || flags.style || flags.remove),
+                "content": element_content(element),
+                "style": element_style(element),
             });
             if let Some(text) = element_text(element) {
                 value["text"] = Value::String(text);
@@ -69,9 +71,96 @@ pub fn slide_detail(deck: &Deck, slide_id: &str) -> Result<Value, ServiceError> 
         "title": slide.title(),
         "hidden": slide.hidden,
         "layout": slide.layout.as_ref().map(|layout| layout.as_str()),
+        "background": slide.background.as_ref().map(fill_value),
         "notes": slide.notes,
         "elements": elements,
     }))
+}
+
+/// One asset with its bytes, for preview surfaces that legitimately need pixels.
+pub fn asset_bytes(deck: &Deck, asset_id: &str) -> Result<Value, ServiceError> {
+    let asset = deck
+        .document()
+        .assets
+        .iter()
+        .find(|asset| asset.id.as_str() == asset_id)
+        .ok_or_else(|| ServiceError::new("object/not-found", format!("asset `{asset_id}` does not exist")))?;
+    Ok(json!({
+        "id": asset.id.as_str(),
+        "mediaType": asset.media_type,
+        "base64": STANDARD.encode(&asset.bytes),
+    }))
+}
+
+/// Fill as the CSS colour the renderers understand, or `null` for inheritance.
+fn fill_value(fill: &Fill) -> Value {
+    match fill {
+        Fill::None => Value::String("none".to_string()),
+        Fill::Solid { color } => Value::String(color.clone()),
+        Fill::Inherit => Value::Null,
+    }
+}
+
+fn line_value(line: &Line) -> Value {
+    json!({ "color": line.color, "widthPt": line.width_emu.map(points) })
+}
+
+/// Renderable payload of one element, in authoring units.
+fn element_content(element: &Element) -> Value {
+    match &element.content {
+        ElementContent::Text(_) => Value::Null,
+        ElementContent::Image(image) => json!({ "assetId": image.asset.as_str() }),
+        ElementContent::Shape(shape) => json!({
+            "geometry": shape.geometry,
+            "fill": shape.fill.as_ref().map(fill_value),
+            "line": shape.line.as_ref().map(line_value),
+        }),
+        ElementContent::Table(table) => json!({
+            "columnWidthsPt": table.column_widths_emu.iter().map(|emu| points(*emu)).collect::<Vec<_>>(),
+            "rows": table
+                .rows
+                .iter()
+                .map(|row| json!({
+                    "heightPt": points(row.height_emu),
+                    "cells": row
+                        .cells
+                        .iter()
+                        .map(|cell| json!({
+                            "text": cell.text.text(),
+                            "fill": cell.fill.as_ref().map(fill_value),
+                        }))
+                        .collect::<Vec<_>>(),
+                }))
+                .collect::<Vec<_>>(),
+        }),
+        ElementContent::Chart(chart) => json!({ "chartType": chart.chart_type, "data": chart.data }),
+        ElementContent::Formula(formula) => json!({ "expression": formula.expression }),
+        ElementContent::Media(media) => json!({
+            "assetId": media.asset.as_str(),
+            "mediaType": match media.media_kind {
+                MediaKind::Audio => "audio",
+                MediaKind::Video => "video",
+            },
+        }),
+    }
+}
+
+/// First-run text styling, so a canvas can draw text without rewriting the model.
+fn element_style(element: &Element) -> Value {
+    let (paragraphs, runs) = match &element.content {
+        ElementContent::Text(text) => (Some(text), text.paragraphs.first().and_then(|paragraph| paragraph.runs.first())),
+        _ => (None, None),
+    };
+    json!({
+        "fill": element.style.fill.as_ref().map(fill_value),
+        "line": element.style.line.as_ref().map(line_value),
+        "fontFamily": element.style.font_family.clone(),
+        "sizePt": runs.and_then(|run| run.size_pt),
+        "bold": runs.and_then(|run| run.bold).unwrap_or(false),
+        "italic": runs.and_then(|run| run.italic).unwrap_or(false),
+        "color": runs.and_then(|run| run.color.clone()),
+        "align": paragraphs.and_then(|text| text.paragraphs.first()).and_then(|paragraph| paragraph.align),
+    })
 }
 
 /// Lists embedded assets with sizes and hashes, never their bytes.

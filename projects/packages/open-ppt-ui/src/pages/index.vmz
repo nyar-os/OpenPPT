@@ -1,0 +1,1680 @@
+<template>
+    <div class="studio">
+        <header class="bar">
+            <div class="brand">
+                <span class="mark">P</span>
+                <div>
+                    <h1>OpenPPT Studio</h1>
+                    <p class="path" :title="projectPath">{{ projectPath || "unsaved native project" }}</p>
+                </div>
+            </div>
+            <div class="bar-group grow">
+                <input class="path-input" data-field="savePath" :value="savePath" placeholder="C:\decks\review.oppt" spellcheck="false" />
+                <button class="btn" data-action="new">New</button>
+                <button class="btn" data-action="open">Open</button>
+                <button class="btn btn-primary" data-action="save">Save</button>
+            </div>
+            <div class="bar-group">
+                <button class="btn" data-action="undo">Undo</button>
+                <button class="btn" data-action="redo">Redo</button>
+                <button class="btn" data-action="present">Present</button>
+                <button class="btn btn-ghost" data-action="close-window">Close</button>
+            </div>
+        </header>
+
+        <div class="main">
+            <aside class="rail">
+                <div class="rail-head">
+                    <span>Slides</span>
+                    <button class="icon-btn" data-action="add-slide" title="Add slide">+</button>
+                </div>
+                <div class="thumbs">
+                    <div v-for="s in deck.slides" :key="s.id" class="thumb" :class="s.id === currentSlideId ? 'thumb active' : 'thumb'" :data-slide-id="s.id">
+                        <span class="thumb-index">{{ s.index + 1 }}</span>
+                        <div class="thumb-card">
+                            <span class="thumb-title">{{ s.title }}</span>
+                            <span class="thumb-meta">{{ s.elements }} objects</span>
+                        </div>
+                        <span class="thumb-hidden" v-if="s.hidden">hidden</span>
+                    </div>
+                </div>
+                <div class="rail-actions">
+                    <button class="btn btn-small" data-action="slide-up">Up</button>
+                    <button class="btn btn-small" data-action="slide-down">Down</button>
+                    <button class="btn btn-small" data-action="slide-duplicate">Duplicate</button>
+                    <button class="btn btn-small" data-action="slide-delete">Delete</button>
+                    <button class="btn btn-small" data-action="slide-hide">Hide</button>
+                </div>
+                <div class="rail-actions">
+                    <button class="btn btn-small" data-action="add-text">+ Text</button>
+                    <button class="btn btn-small" data-action="add-shape">+ Shape</button>
+                    <button class="btn btn-small" data-action="add-image">+ Image</button>
+                    <input class="file-input" type="file" accept="image/*" data-file="image" />
+                </div>
+            </aside>
+
+            <main class="stage-wrap" data-stage-wrap>
+                <div class="stage-frame" data-stage-frame :style="frameStyle()">
+                    <div class="stage" data-stage :style="stageStyle()">
+                        <div class="el" v-for="box in elementBoxes()" :key="box.id" :data-el-id="box.id" :style="box.style"></div>
+                        <img class="el-image" v-for="image in imageBlocks()" :key="image.id" :data-el-id="image.id" :src="image.src" :style="image.style" alt="" />
+                        <div class="text-block" v-for="block in textBlocks()" :key="block.key" :data-el-id="block.elId" :style="block.style">{{ block.text }}</div>
+                        <div class="bar-block" v-for="bar in barBlocks()" :key="bar.key" :data-el-id="bar.elId" :style="bar.style"></div>
+                        <div class="selection" v-if="hasSelection()" :style="selectionStyle()"></div>
+                        <div class="handle" v-if="hasSelection()" data-handle="resize" :style="handleStyle()"></div>
+                    </div>
+                </div>
+                <p class="hint">Drag to move · corner handle resizes · click a thumbnail to switch pages</p>
+            </main>
+
+            <aside class="inspector">
+                <h2>Inspector</h2>
+                <div v-if="hasSelection()">
+                    <p class="badge">{{ selectedElement().kind }}</p>
+                    <label class="field"><span>X</span><input type="number" step="1" data-field="x" :value="fieldValue('x')" /></label>
+                    <label class="field"><span>Y</span><input type="number" step="1" data-field="y" :value="fieldValue('y')" /></label>
+                    <label class="field"><span>W</span><input type="number" step="1" data-field="width" :value="fieldValue('width')" /></label>
+                    <label class="field"><span>H</span><input type="number" step="1" data-field="height" :value="fieldValue('height')" /></label>
+                    <label class="field"><span>Rotate</span><input type="number" step="1" data-field="rotation" :value="fieldValue('rotation')" /></label>
+                    <label class="field"><span>Alt</span><input type="text" data-field="alt" :value="selectedElement().alt || ''" /></label>
+                    <label class="field field-col" v-if="selectedElement().kind === 'text'"><span>Text</span><textarea rows="4" data-field="text">{{ selectedElement().text || "" }}</textarea></label>
+                    <div class="field-row">
+                        <button class="btn btn-small" data-action="element-lock">{{ selectedElement().locked ? "Unlock" : "Lock" }}</button>
+                        <button class="btn btn-small btn-danger" data-action="element-delete">Delete</button>
+                    </div>
+                </div>
+                <p v-else class="empty">Select an object on the canvas.</p>
+
+                <h2>Slide</h2>
+                <label class="field"><span>Title</span><input type="text" data-field="slide-title" :value="slide ? slide.title : ''" /></label>
+                <label class="field field-col"><span>Notes</span><textarea rows="5" data-field="notes">{{ slide ? slide.notes || "" : "" }}</textarea></label>
+                <div class="field-row">
+                    <button class="btn btn-small" data-action="slide-notes">Save notes</button>
+                </div>
+            </aside>
+        </div>
+
+        <footer class="statusbar">
+            <span :class="errorText ? 'status error' : 'status'">{{ errorText || status }}</span>
+            <span class="spacer"></span>
+            <span v-if="deck">rev {{ deck.revision }} · {{ deck.slides.length }} slides · {{ round(deck.size.widthPt) }}×{{ round(deck.size.heightPt) }}pt</span>
+        </footer>
+
+        <div class="present" v-if="presenting">
+            <div class="present-frame" data-present-frame :style="presentFrameStyle()">
+                <div class="stage" data-present-stage :style="presentStageStyle()">
+                    <div class="el" v-for="box in elementBoxes()" :key="box.id" :style="box.style"></div>
+                    <img class="el-image" v-for="image in imageBlocks()" :key="image.id" :src="image.src" :style="image.style" alt="" />
+                    <div class="text-block" v-for="block in textBlocks()" :key="block.key" :style="block.style">{{ block.text }}</div>
+                    <div class="bar-block" v-for="bar in barBlocks()" :key="bar.key" :style="bar.style"></div>
+                </div>
+            </div>
+            <div class="present-bar">
+                <button class="btn" data-action="present-prev">Prev</button>
+                <span>{{ presentLabel() }}</span>
+                <button class="btn" data-action="present-next">Next</button>
+                <button class="btn btn-ghost" data-action="present-exit">Exit</button>
+            </div>
+        </div>
+    </div>
+</template>
+
+<style>
+.studio {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--op-bg);
+}
+
+.bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--op-line);
+    background: var(--op-surface);
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 210px;
+}
+
+.mark {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    background: var(--op-accent);
+    color: #fff8f2;
+    font-family: "Iowan Old Style", Georgia, serif;
+    font-size: 17px;
+}
+
+.brand h1 {
+    font-size: 16px;
+    line-height: 1.1;
+}
+
+.path {
+    margin: 1px 0 0;
+    max-width: 320px;
+    overflow: hidden;
+    color: var(--op-muted);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bar-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.grow {
+    flex: 1;
+    min-width: 0;
+}
+
+.path-input {
+    flex: 1;
+    min-width: 140px;
+    max-width: 380px;
+    padding: 6px 9px;
+    border: 1px solid var(--op-line);
+    border-radius: 7px;
+    background: #fff;
+    font-size: 12px;
+    user-select: text;
+}
+
+.btn {
+    padding: 6px 12px;
+    border: 1px solid var(--op-line);
+    border-radius: 7px;
+    background: var(--op-surface);
+    font-size: 12px;
+}
+
+.btn:hover {
+    border-color: var(--op-accent);
+}
+
+.btn-primary {
+    border-color: var(--op-accent);
+    background: var(--op-accent);
+    color: #fff8f2;
+}
+
+.btn-primary:hover {
+    background: #8f3a19;
+}
+
+.btn-ghost {
+    background: transparent;
+}
+
+.btn-danger {
+    border-color: #c98f8f;
+    color: var(--op-danger);
+}
+
+.btn-small {
+    padding: 4px 8px;
+    font-size: 11px;
+}
+
+.icon-btn {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--op-line);
+    border-radius: 6px;
+    background: var(--op-surface);
+    line-height: 1;
+}
+
+.main {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 208px minmax(0, 1fr) 232px;
+}
+
+.rail {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+    padding: 12px;
+    border-right: 1px solid var(--op-line);
+    background: var(--op-surface-2);
+    overflow: auto;
+}
+
+.rail-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: var(--op-muted);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.thumbs {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.thumb {
+    position: relative;
+    display: flex;
+    gap: 8px;
+    padding: 7px;
+    border: 1px solid var(--op-line);
+    border-radius: 8px;
+    background: var(--op-surface);
+    cursor: pointer;
+}
+
+.thumb:hover {
+    border-color: #b8a68d;
+}
+
+.thumb.active {
+    border-color: var(--op-accent);
+    box-shadow: inset 0 0 0 1px var(--op-accent);
+}
+
+.thumb-index {
+    color: var(--op-muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.thumb-card {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.thumb-title {
+    overflow: hidden;
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.thumb-meta {
+    color: var(--op-muted);
+    font-size: 10px;
+}
+
+.thumb-hidden {
+    position: absolute;
+    right: 6px;
+    bottom: 5px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--op-surface-2);
+    color: var(--op-muted);
+    font-size: 9px;
+    text-transform: uppercase;
+}
+
+.rail-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.file-input {
+    display: none;
+}
+
+.stage-wrap {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    min-width: 0;
+    min-height: 0;
+    padding: 26px;
+    overflow: auto;
+    background:
+        radial-gradient(circle at 1px 1px, #d8cdbb 1px, transparent 0) 0 0 / 22px 22px,
+        var(--op-bg);
+}
+
+.stage-frame {
+    position: relative;
+    flex: none;
+    margin: auto;
+}
+
+.stage {
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 18px 40px rgba(41, 31, 20, 0.16);
+    color: #1d1a16;
+}
+
+.el {
+    position: absolute;
+    overflow: hidden;
+}
+
+.el-image {
+    position: absolute;
+    object-fit: cover;
+    pointer-events: auto;
+}
+
+.text-block {
+    position: absolute;
+    overflow: hidden;
+    word-break: break-word;
+    white-space: pre-wrap;
+    cursor: default;
+}
+
+.bar-block {
+    position: absolute;
+    border-radius: 2px 2px 0 0;
+    background: var(--op-teal);
+}
+
+.selection {
+    position: absolute;
+    border: 1.5px solid var(--op-accent);
+    pointer-events: none;
+}
+
+.handle {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    border: 1.5px solid var(--op-accent);
+    background: #fff8f2;
+    cursor: nwse-resize;
+}
+
+.hint {
+    margin: 0;
+    color: var(--op-muted);
+    font-size: 11px;
+}
+
+.inspector {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    padding: 14px;
+    border-left: 1px solid var(--op-line);
+    background: var(--op-surface);
+    overflow: auto;
+}
+
+.inspector h2 {
+    margin-top: 6px;
+    color: var(--op-muted);
+    font-family: "Segoe UI", system-ui, sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.badge {
+    display: inline-block;
+    margin: 0 0 2px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--op-accent-soft);
+    color: var(--op-accent);
+    font-size: 10px;
+    text-transform: uppercase;
+}
+
+.field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+}
+
+.field span {
+    width: 46px;
+    flex: none;
+    color: var(--op-muted);
+}
+
+.field input,
+.field textarea {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 7px;
+    border: 1px solid var(--op-line);
+    border-radius: 6px;
+    background: #fff;
+    font-size: 12px;
+    user-select: text;
+}
+
+.field-col {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.field-col span {
+    width: auto;
+}
+
+.field-col textarea {
+    width: 100%;
+    resize: vertical;
+}
+
+.field-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.empty {
+    margin: 0;
+    color: var(--op-muted);
+    font-size: 12px;
+}
+
+.statusbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 14px;
+    border-top: 1px solid var(--op-line);
+    background: var(--op-surface);
+    color: var(--op-muted);
+    font-size: 11px;
+}
+
+.statusbar .error {
+    color: var(--op-danger);
+}
+
+.statusbar .spacer {
+    flex: 1;
+}
+
+.present {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    background: #14110d;
+}
+
+.present-frame {
+    position: relative;
+    flex: none;
+}
+
+.present .btn {
+    border-color: #4a423a;
+    background: #221d18;
+    color: #f4ece0;
+}
+
+.present-bar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    color: #cfc2b0;
+    font-size: 12px;
+}
+</style>
+
+<script client>
+const FALLBACK_DECK = {
+    id: "preview",
+    revision: 0,
+    title: "Preview deck",
+    size: { widthPt: 960, heightPt: 540 },
+    layouts: [],
+    slides: [{ id: "preview-1", index: 0, title: "Preview slide", hidden: false, elements: 3, notes: null }],
+};
+
+export default class StudioPage {
+    hostReady = false;
+    status = "Starting";
+    errorText = "";
+    projectPath = "";
+    savePath = "";
+    currentSlideId = "";
+    selectedId = "";
+    scale = 0.8;
+    presentScale = 0.8;
+    presenting = false;
+    deck = FALLBACK_DECK;
+    slide = null;
+    imageCache = {};
+    handle = 0;
+    seq = 0;
+    pending = {};
+    drag = null;
+    dragRect = null;
+    dragTargetId = "";
+
+    onMount() {
+        // Static render (build-time SSR) has no window; the client mount below
+        // takes over in the WebView or a regular browser tab.
+        if (typeof window === "undefined") {
+            return;
+        }
+        const view = window;
+        const webview = view.chrome && view.chrome.webview;
+        if (webview) {
+            this.hostReady = true;
+            webview.addEventListener("message", (event) => this.onHostMessage(event));
+            void this.ready();
+        } else {
+            this.hostReady = false;
+            this.status = "Preview mode — native window unavailable";
+            this.slide = this.previewSlide();
+        }
+
+        document.addEventListener("click", (event) => void this.onClick(event));
+        document.addEventListener("change", (event) => void this.onChange(event));
+        document.addEventListener("pointerdown", (event) => this.onPointerDown(event));
+        window.addEventListener("pointermove", (event) => this.onPointerMove(event));
+        window.addEventListener("pointerup", () => void this.onPointerUp());
+        window.addEventListener("resize", () => this.measure());
+        window.addEventListener("keydown", (event) => this.onKeyDown(event));
+        this.measure();
+    }
+
+    round(value) {
+        return Math.round(value);
+    }
+
+    deckWidth() {
+        return this.deck.size.widthPt || 960;
+    }
+
+    deckHeight() {
+        return this.deck.size.heightPt || 540;
+    }
+
+    currentSlide() {
+        if (!this.deck) {
+            return null;
+        }
+        return this.deck.slides.find((item) => item.id === this.currentSlideId) || null;
+    }
+
+    selectedElement() {
+        if (!this.slide || !this.selectedId) {
+            return null;
+        }
+        return this.slide.elements.find((item) => item.id === this.selectedId) || null;
+    }
+
+    hasSelection() {
+        return this.selectedElement() !== null;
+    }
+
+    fieldValue(name) {
+        const element = this.selectedElement();
+        if (!element) {
+            return "";
+        }
+        const transform = element.transform;
+        if (name === "x") {
+            return Math.round(transform.xPt);
+        }
+        if (name === "y") {
+            return Math.round(transform.yPt);
+        }
+        if (name === "width") {
+            return Math.round(transform.widthPt);
+        }
+        if (name === "height") {
+            return Math.round(transform.heightPt);
+        }
+        if (name === "rotation") {
+            return Math.round(transform.rotationDeg || 0);
+        }
+        return "";
+    }
+
+    frameStyle() {
+        return `width:${this.deckWidth() * this.scale}pt;height:${this.deckHeight() * this.scale}pt;`;
+    }
+
+    stageStyle() {
+        return this.stageCss(this.scale);
+    }
+
+    presentFrameStyle() {
+        return `width:${this.deckWidth() * this.presentScale}pt;height:${this.deckHeight() * this.presentScale}pt;`;
+    }
+
+    presentStageStyle() {
+        return this.stageCss(this.presentScale);
+    }
+
+    presentLabel() {
+        const slide = this.currentSlide();
+        return slide ? `${slide.index + 1} / ${this.deck.slides.length}` : `${this.deck.slides.length} / ${this.deck.slides.length}`;
+    }
+
+    elementBoxes() {
+        if (!this.slide) {
+            return [];
+        }
+        return this.slide.elements
+            .filter((element) => element.kind !== "text")
+            .map((element) => ({ id: element.id, style: this.boxStyle(element) }));
+    }
+
+    imageBlocks() {
+        if (!this.slide) {
+            return [];
+        }
+        const blocks = [];
+        for (const element of this.slide.elements) {
+            const assetId = element.content && element.content.assetId;
+            const src = assetId ? this.imageCache[assetId] : "";
+            if (element.kind === "image" && src) {
+                blocks.push({ id: element.id, src, style: this.rectCss(this.effectiveTransform(element), true) });
+            }
+        }
+        return blocks;
+    }
+
+    textBlocks() {
+        if (!this.slide) {
+            return [];
+        }
+        const blocks = [];
+        for (const element of this.slide.elements) {
+            if (element.kind === "text") {
+                blocks.push({
+                    key: `${element.id}-text`,
+                    elId: element.id,
+                    text: element.text || "",
+                    style: this.textCss(element, element.transform),
+                });
+            } else if (element.kind === "formula") {
+                blocks.push({
+                    key: `${element.id}-formula`,
+                    elId: element.id,
+                    text: (element.content && element.content.expression) || "",
+                    style: this.textCss(element, element.transform, true),
+                });
+            } else if (element.kind === "table") {
+                for (const cell of this.tableCells(element)) {
+                    blocks.push(cell);
+                }
+            } else if (element.kind === "chart") {
+                const chartType = (element.content && element.content.chartType) || "chart";
+                const data = (element.content && element.content.data) || {};
+                const series = data.series || [];
+                const categories = data.categories || [];
+                blocks.push({
+                    key: `${element.id}-label`,
+                    elId: element.id,
+                    text: `${chartType} · ${series.length} series · ${categories.length} categories`,
+                    style: this.captionCss(element),
+                });
+            } else if (element.kind === "media") {
+                blocks.push({
+                    key: `${element.id}-media`,
+                    elId: element.id,
+                    text: (element.content && element.content.mediaType) || "media",
+                    style: this.captionCss(element),
+                });
+            }
+        }
+        return blocks;
+    }
+
+    barBlocks() {
+        if (!this.slide) {
+            return [];
+        }
+        const bars = [];
+        for (const element of this.slide.elements) {
+            if (element.kind !== "chart") {
+                continue;
+            }
+            const type = String((element.content && element.content.chartType) || "").toLowerCase();
+            if (type.indexOf("bar") < 0 && type.indexOf("column") < 0) {
+                continue;
+            }
+            const data = element.content && element.content.data;
+            const values = data && data.series && data.series[0] ? data.series[0].values || [] : [];
+            if (!values.length) {
+                continue;
+            }
+            const rect = this.effectiveTransform(element);
+            const max = Math.max.apply(null, values.concat([1]));
+            const gap = rect.widthPt * 0.06;
+            const slot = (rect.widthPt - gap * 2) / values.length;
+            const barWidth = slot * 0.62;
+            const base = rect.yPt + rect.heightPt * 0.82;
+            const height = rect.heightPt * 0.62;
+            values.forEach((value, index) => {
+                const barHeight = Math.max((value / max) * height, 1);
+                bars.push({
+                    key: `${element.id}-bar-${index}`,
+                    elId: element.id,
+                    style: `left:${rect.xPt + gap + slot * index + (slot - barWidth) / 2}pt;top:${base - barHeight}pt;width:${barWidth}pt;height:${barHeight}pt;`,
+                });
+            });
+        }
+        return bars;
+    }
+
+    selectionStyle() {
+        const element = this.selectedElement();
+        if (!element) {
+            return "display:none;";
+        }
+        const rect = element.transform;
+        return `left:${rect.xPt}pt;top:${rect.yPt}pt;width:${rect.widthPt}pt;height:${rect.heightPt}pt;transform:rotate(${rect.rotationDeg || 0}deg);`;
+    }
+
+    handleStyle() {
+        const element = this.selectedElement();
+        if (!element) {
+            return "display:none;";
+        }
+        const rect = element.transform;
+        return `left:${rect.xPt + rect.widthPt - 5}pt;top:${rect.yPt + rect.heightPt - 5}pt;`;
+    }
+
+    stageCss(scale) {
+        const background = (this.slide && this.slide.background) || "#fffcf6";
+        return `width:${this.deckWidth()}pt;height:${this.deckHeight()}pt;transform:scale(${scale});transform-origin:0 0;background:${background};`;
+    }
+
+    effectiveTransform(element) {
+        if (this.dragRect && this.dragTargetId === element.id) {
+            return this.dragRect;
+        }
+        return element.transform;
+    }
+
+    rectCss(rect, image) {
+        const base = `left:${rect.xPt}pt;top:${rect.yPt}pt;width:${rect.widthPt}pt;height:${rect.heightPt}pt;transform:rotate(${rect.rotationDeg || 0}deg);`;
+        return image ? base : `${base}background:#efe7d9;`;
+    }
+
+    boxStyle(element) {
+        const rect = this.effectiveTransform(element);
+        const base = this.rectCss(rect, false);
+        const content = element.content || {};
+        if (element.kind === "shape") {
+            const fill = content.fill || "";
+            const background = !fill || fill === "none" ? "transparent" : fill;
+            const line = content.line && content.line.color ? `border:1px solid ${content.line.color};` : "";
+            const radius = content.geometry === "ellipse" ? "border-radius:50%;" : content.geometry === "roundRect" ? "border-radius:8pt;" : "";
+            return `${base}background:${background};${line}${radius}`;
+        }
+        if (element.kind === "image") {
+            return `${base}background:#1d1a1622;`;
+        }
+        if (element.kind === "table") {
+            return `${base}background:#fff;border:1px solid #d9cebc;`;
+        }
+        if (element.kind === "chart") {
+            return `${base}background:#fffcf6;border:1px solid #d9cebc;`;
+        }
+        return base;
+    }
+
+    textCss(element, rect, center) {
+        const style = element.style || {};
+        const size = style.sizePt || 18;
+        const weight = style.bold ? 600 : 400;
+        const italic = style.italic ? "italic" : "normal";
+        const color = style.color || "#1d1a16";
+        const family = style.fontFamily || "Segoe UI, system-ui, sans-serif";
+        let align = "left";
+        if (center || style.align === "center") {
+            align = "center";
+        } else if (style.align === "right") {
+            align = "right";
+        }
+        const padding = 4;
+        const top = center ? rect.yPt + rect.heightPt / 2 - size * 0.7 : rect.yPt + padding;
+        return `left:${rect.xPt + padding}pt;top:${top}pt;width:${rect.widthPt - padding * 2}pt;height:${rect.heightPt - padding * 2}pt;font-size:${size}pt;font-weight:${weight};font-style:${italic};color:${color};font-family:${family};text-align:${align};line-height:1.25;`;
+    }
+
+    captionCss(element) {
+        const rect = element.transform;
+        return `left:${rect.xPt + 6}pt;top:${rect.yPt + 5}pt;width:${rect.widthPt - 12}pt;font-size:9pt;color:#6d6458;font-family:Segoe UI, system-ui, sans-serif;`;
+    }
+
+    tableCells(element) {
+        const rect = this.effectiveTransform(element);
+        const content = element.content || {};
+        const columns = content.columnWidthsPt || [];
+        const rows = content.rows || [];
+        const blocks = [];
+        let top = rect.yPt;
+        rows.forEach((row, rowIndex) => {
+            let left = rect.xPt;
+            row.cells.forEach((cell, cellIndex) => {
+                const width = columns[cellIndex] || rect.widthPt / Math.max(row.cells.length, 1);
+                const height = row.heightPt || 24;
+                const fill = cell.fill && cell.fill !== "none" ? cell.fill : "#ffffff";
+                blocks.push({
+                    key: `${element.id}-cell-${rowIndex}-${cellIndex}`,
+                    elId: element.id,
+                    text: cell.text || "",
+                    style: `left:${left + 2}pt;top:${top + 2}pt;width:${width - 4}pt;height:${height - 4}pt;padding:2pt 3pt;background:${fill};border:0.5pt solid #d9cebc;font-size:9pt;color:#1d1a16;font-family:Segoe UI, system-ui, sans-serif;overflow:hidden;`,
+                });
+                left += width;
+            });
+            top += row.heightPt || 24;
+        });
+        return blocks;
+    }
+
+    previewSlide() {
+        return {
+            id: "preview-1",
+            index: 0,
+            title: "Preview slide",
+            hidden: false,
+            layout: null,
+            background: "#fffcf6",
+            notes: null,
+            elements: [
+                {
+                    id: "preview-title",
+                    kind: "text",
+                    transform: { xPt: 72, yPt: 120, widthPt: 640, heightPt: 90, rotationDeg: null },
+                    alt: null,
+                    locked: false,
+                    text: "OpenPPT editor",
+                    style: { sizePt: 40, bold: true, color: "#1d1a16", align: "left" },
+                },
+                {
+                    id: "preview-body",
+                    kind: "text",
+                    transform: { xPt: 72, yPt: 220, widthPt: 560, heightPt: 64, rotationDeg: null },
+                    alt: null,
+                    locked: false,
+                    text: "Numeric editing needs the native window.",
+                    style: { sizePt: 18, bold: false, color: "#6d6458", align: "left" },
+                },
+                {
+                    id: "preview-shape",
+                    kind: "shape",
+                    transform: { xPt: 700, yPt: 110, widthPt: 180, heightPt: 180, rotationDeg: null },
+                    alt: null,
+                    locked: false,
+                    content: { geometry: "ellipse", fill: "#f2ddd2", line: { color: "#a8451f", widthPt: 1 } },
+                },
+            ],
+        };
+    }
+
+    measure() {
+        const wrap = document.querySelector("[data-stage-wrap]");
+        if (wrap) {
+            const width = Math.max(wrap.clientWidth - 72, 120);
+            const height = Math.max(wrap.clientHeight - 96, 120);
+            this.scale = Math.max(0.08, Math.min(width / this.deckWidth(), height / this.deckHeight()));
+        }
+        if (this.presenting) {
+            const width = Math.max(window.innerWidth - 96, 160);
+            const height = Math.max(window.innerHeight - 150, 120);
+            this.presentScale = Math.max(0.08, Math.min(width / this.deckWidth(), height / this.deckHeight()));
+        }
+    }
+
+    async ready() {
+        try {
+            this.status = "Connected";
+            await this.newDeck();
+        } catch (error) {
+            this.fail(error);
+        }
+    }
+
+    rpc(type, payload) {
+        const view = window;
+        const webview = view.chrome && view.chrome.webview;
+        if (!webview) {
+            return Promise.reject(new Error("native window unavailable"));
+        }
+        const id = `q${++this.seq}`;
+        return new Promise((resolve, reject) => {
+            this.pending[id] = { resolve, reject };
+            webview.postMessage(JSON.stringify(Object.assign({ type, id }, payload || {})));
+        });
+    }
+
+    onHostMessage(event) {
+        let data = event.data;
+        if (typeof data === "string") {
+            try {
+                data = JSON.parse(data);
+            } catch {
+                return;
+            }
+        }
+        if (!data || typeof data !== "object" || typeof data.id !== "string") {
+            return;
+        }
+        const entry = this.pending[data.id];
+        if (!entry) {
+            return;
+        }
+        delete this.pending[data.id];
+        if (typeof data.type === "string" && data.type.endsWith("Error")) {
+            entry.reject(new Error(data.message || data.type));
+        } else {
+            entry.resolve(data);
+        }
+    }
+
+    fail(error) {
+        this.errorText = error instanceof Error ? error.message : String(error);
+        this.status = "Failed";
+    }
+
+    async newDeck() {
+        const response = await this.rpc("deck.create", { request: { title: "Untitled deck", size: "16:9" } });
+        if (this.handle) {
+            try {
+                await this.rpc("deck.close", { handle: this.handle });
+            } catch {
+                // The previous deck is already gone.
+            }
+        }
+        this.handle = response.handle;
+        this.deck = response.deck;
+        this.projectPath = "";
+        this.savePath = "";
+        this.imageCache = {};
+        if (!this.deck.slides.length) {
+            let report = await this.rpc("deck.edit", {
+                handle: this.handle,
+                request: { expectedRevision: this.deck.revision, operations: [{ op: "slide.add" }] },
+            });
+            this.deck = report.report.deck;
+            const created = this.deck.slides[0];
+            if (created) {
+                report = await this.rpc("deck.edit", {
+                    handle: this.handle,
+                    request: {
+                        expectedRevision: this.deck.revision,
+                        operations: [{ op: "slide.setTitle", slideId: created.id, text: "Slide 1" }],
+                    },
+                });
+                this.deck = report.report.deck;
+            }
+        }
+        const first = this.deck.slides[0];
+        this.selectedId = "";
+        await this.selectSlide(first ? first.id : "");
+        this.status = "New deck ready";
+        this.errorText = "";
+        this.measure();
+    }
+
+    async selectSlide(slideId) {
+        this.currentSlideId = slideId;
+        this.selectedId = "";
+        if (!slideId) {
+            this.slide = null;
+            return;
+        }
+        const response = await this.rpc("deck.slide", { handle: this.handle, slideId });
+        this.slide = response.slide;
+        await this.loadAssets();
+    }
+
+    async loadAssets() {
+        if (!this.slide) {
+            return;
+        }
+        let changed = false;
+        for (const element of this.slide.elements) {
+            const assetId = element.content && element.content.assetId;
+            if (!assetId || this.imageCache[assetId]) {
+                continue;
+            }
+            try {
+                const response = await this.rpc("deck.asset", { handle: this.handle, assetId });
+                this.imageCache = Object.assign({}, this.imageCache, {
+                    [assetId]: `data:${response.asset.mediaType};base64,${response.asset.base64}`,
+                });
+                changed = true;
+            } catch {
+                // Unreadable assets stay as placeholder boxes.
+            }
+        }
+        if (changed) {
+            this.imageCache = Object.assign({}, this.imageCache);
+        }
+    }
+
+    async refresh() {
+        const summary = await this.rpc("deck.summary", { handle: this.handle });
+        this.deck = summary.deck;
+        if (this.currentSlideId) {
+            const response = await this.rpc("deck.slide", { handle: this.handle, slideId: this.currentSlideId });
+            this.slide = response.slide;
+            await this.loadAssets();
+        }
+    }
+
+    async applyEdit(operations) {
+        const response = await this.rpc("deck.edit", {
+            handle: this.handle,
+            request: { expectedRevision: this.deck.revision, operations },
+        });
+        this.deck = response.report.deck;
+        this.errorText = "";
+        if (this.currentSlideId) {
+            const detail = await this.rpc("deck.slide", { handle: this.handle, slideId: this.currentSlideId });
+            this.slide = detail.slide;
+            await this.loadAssets();
+        }
+        this.status = `Revision ${this.deck.revision}`;
+    }
+
+    async onClick(event) {
+        const target = event.target;
+        if (!target || !target.closest) {
+            return;
+        }
+        const actionEl = target.closest("[data-action]");
+        if (actionEl && actionEl.dataset.action) {
+            await this.runAction(actionEl.dataset.action);
+            return;
+        }
+        const thumb = target.closest("[data-slide-id]");
+        if (thumb && thumb.dataset.slideId) {
+            try {
+                await this.selectSlide(thumb.dataset.slideId);
+            } catch (error) {
+                this.fail(error);
+            }
+        }
+    }
+
+    async runAction(action) {
+        try {
+            if (action === "new") {
+                return await this.newDeck();
+            }
+            if (action === "open") {
+                return await this.open();
+            }
+            if (action === "save") {
+                return await this.save();
+            }
+            if (action === "undo") {
+                return await this.history(false);
+            }
+            if (action === "redo") {
+                return await this.history(true);
+            }
+            if (action === "present") {
+                return this.enterPresent();
+            }
+            if (action === "present-prev") {
+                return await this.presentStep(-1);
+            }
+            if (action === "present-next") {
+                return await this.presentStep(1);
+            }
+            if (action === "present-exit") {
+                return this.exitPresent();
+            }
+            if (action === "close-window") {
+                return await this.rpc("close", {});
+            }
+            if (action === "add-slide") {
+                return await this.addSlide();
+            }
+            if (action === "slide-up") {
+                return await this.moveSlide(-1);
+            }
+            if (action === "slide-down") {
+                return await this.moveSlide(1);
+            }
+            if (action === "slide-duplicate") {
+                return await this.duplicateSlide();
+            }
+            if (action === "slide-delete") {
+                return await this.deleteSlide();
+            }
+            if (action === "slide-hide") {
+                return await this.toggleHidden();
+            }
+            if (action === "slide-notes") {
+                return await this.saveNotes();
+            }
+            if (action === "add-text") {
+                return await this.addText();
+            }
+            if (action === "add-shape") {
+                return await this.addShape();
+            }
+            if (action === "add-image") {
+                const input = document.querySelector('[data-file="image"]');
+                if (input) {
+                    input.click();
+                }
+                return;
+            }
+            if (action === "element-delete") {
+                return await this.deleteElement();
+            }
+            if (action === "element-lock") {
+                return await this.toggleLock();
+            }
+        } catch (error) {
+            this.fail(error);
+        }
+    }
+
+    async open() {
+        const path = this.savePath.trim();
+        if (!path) {
+            this.errorText = "Type a project path before opening.";
+            return;
+        }
+        const response = await this.rpc("deck.open", { path });
+        if (this.handle) {
+            try {
+                await this.rpc("deck.close", { handle: this.handle });
+            } catch {
+                // The previous handle is already closed.
+            }
+        }
+        this.handle = response.handle;
+        this.deck = response.deck;
+        this.projectPath = path;
+        this.imageCache = {};
+        const first = this.deck.slides[0];
+        await this.selectSlide(first ? first.id : "");
+        this.status = "Opened";
+        this.errorText = "";
+        this.measure();
+    }
+
+    async save() {
+        const path = this.savePath.trim() || this.projectPath;
+        if (!path) {
+            this.errorText = "Type a project path before saving.";
+            return;
+        }
+        const response = await this.rpc("deck.save", { handle: this.handle, path, overwrite: true });
+        this.projectPath = path;
+        this.status = `Saved ${response.report.bytes} bytes at revision ${response.report.revision}`;
+        this.errorText = "";
+    }
+
+    async history(redo) {
+        const response = await this.rpc(redo ? "deck.redo" : "deck.undo", { handle: this.handle });
+        this.deck = response.report.deck;
+        if (this.currentSlideId) {
+            const detail = await this.rpc("deck.slide", { handle: this.handle, slideId: this.currentSlideId });
+            this.slide = detail.slide;
+            await this.loadAssets();
+        }
+        this.selectedId = "";
+        this.status = redo ? "Redo" : "Undo";
+        this.errorText = "";
+    }
+
+    async addSlide() {
+        const current = this.currentSlide();
+        const report = await this.rpc("deck.edit", {
+            handle: this.handle,
+            request: {
+                expectedRevision: this.deck.revision,
+                operations: [{ op: "slide.add", index: current ? current.index + 1 : undefined }],
+            },
+        });
+        this.deck = report.report.deck;
+        const created = report.report.results && report.report.results[0];
+        const next = this.deck.slides.find((item) => item.id === created) || this.deck.slides[this.deck.slides.length - 1];
+        await this.selectSlide(next ? next.id : "");
+        this.status = "Slide added";
+    }
+
+    async moveSlide(delta) {
+        const current = this.currentSlide();
+        if (!current) {
+            return;
+        }
+        const order = this.deck.slides.map((item) => item.id);
+        const target = current.index + delta;
+        if (target < 0 || target >= order.length) {
+            return;
+        }
+        order.splice(current.index, 1);
+        order.splice(target, 0, current.id);
+        await this.applyEdit([{ op: "slide.reorder", slideIds: order }]);
+    }
+
+    async duplicateSlide() {
+        const current = this.currentSlide();
+        if (!current) {
+            return;
+        }
+        const report = await this.rpc("deck.edit", {
+            handle: this.handle,
+            request: {
+                expectedRevision: this.deck.revision,
+                operations: [{ op: "slide.duplicate", slideId: current.id, index: current.index + 1 }],
+            },
+        });
+        this.deck = report.report.deck;
+        const created = report.report.results && report.report.results[0];
+        await this.selectSlide(created || current.id);
+        this.status = "Slide duplicated";
+    }
+
+    async deleteSlide() {
+        const current = this.currentSlide();
+        if (!current || this.deck.slides.length <= 1) {
+            this.errorText = "A deck needs at least one slide.";
+            return;
+        }
+        await this.applyEdit([{ op: "slide.remove", slideId: current.id }]);
+        const next = this.deck.slides[Math.min(current.index, this.deck.slides.length - 1)];
+        await this.selectSlide(next ? next.id : "");
+    }
+
+    async toggleHidden() {
+        const current = this.currentSlide();
+        if (!current) {
+            return;
+        }
+        await this.applyEdit([{ op: "slide.setHidden", slideId: current.id, hidden: !current.hidden }]);
+    }
+
+    async saveNotes() {
+        if (!this.slide) {
+            return;
+        }
+        await this.applyEdit([{ op: "slide.setNotes", slideId: this.slide.id, text: this.slide.notes || "" }]);
+        this.status = "Notes saved";
+    }
+
+    async addText() {
+        if (!this.slide) {
+            return;
+        }
+        const report = await this.rpc("deck.edit", {
+            handle: this.handle,
+            request: {
+                expectedRevision: this.deck.revision,
+                operations: [
+                    {
+                        op: "text.add",
+                        slideId: this.slide.id,
+                        text: "New text",
+                        transform: { xPt: 96, yPt: 96, widthPt: 420, heightPt: 64 },
+                    },
+                ],
+            },
+        });
+        this.deck = report.report.deck;
+        const created = report.report.results && report.report.results[0];
+        await this.refresh();
+        this.selectedId = created || "";
+        this.status = "Text added";
+    }
+
+    async addShape() {
+        if (!this.slide) {
+            return;
+        }
+        const report = await this.rpc("deck.edit", {
+            handle: this.handle,
+            request: {
+                expectedRevision: this.deck.revision,
+                operations: [
+                    {
+                        op: "shape.add",
+                        slideId: this.slide.id,
+                        geometry: "rect",
+                        fill: "#f2ddd2",
+                        line: { color: "#a8451f", widthPt: 1 },
+                        transform: { xPt: 120, yPt: 120, widthPt: 260, heightPt: 160 },
+                    },
+                ],
+            },
+        });
+        this.deck = report.report.deck;
+        const created = report.report.results && report.report.results[0];
+        await this.refresh();
+        this.selectedId = created || "";
+        this.status = "Shape added";
+    }
+
+    async addImage(file) {
+        if (!this.slide) {
+            return;
+        }
+        const base64 = await this.readBase64(file);
+        const report = await this.rpc("deck.edit", {
+            handle: this.handle,
+            request: {
+                expectedRevision: this.deck.revision,
+                operations: [
+                    {
+                        op: "image.add",
+                        slideId: this.slide.id,
+                        alt: file.name,
+                        transform: { xPt: 120, yPt: 120, widthPt: 360, heightPt: 240 },
+                        asset: { name: file.name, mediaType: file.type || "image/png", base64 },
+                    },
+                ],
+            },
+        });
+        this.deck = report.report.deck;
+        const created = report.report.results && report.report.results[0];
+        await this.refresh();
+        this.selectedId = created || "";
+        this.status = "Image added";
+    }
+
+    readBase64(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                const result = String(reader.result || "");
+                resolve(result.slice(result.indexOf(",") + 1));
+            };
+            reader.onerror = () => reject(reader.error || new Error("unreadable file"));
+            reader.readAsDataURL(file);
+        });
+    }
+
+    async deleteElement() {
+        const element = this.selectedElement();
+        if (!element || !this.slide) {
+            return;
+        }
+        await this.applyEdit([{ op: "element.remove", slideId: this.slide.id, elementId: element.id }]);
+        this.selectedId = "";
+        this.status = "Object removed";
+    }
+
+    async toggleLock() {
+        const element = this.selectedElement();
+        if (!element || !this.slide) {
+            return;
+        }
+        const lock = !element.locked;
+        await this.applyEdit([
+            {
+                op: "element.lock",
+                slideId: this.slide.id,
+                elementId: element.id,
+                flags: { move: lock, resize: lock },
+            },
+        ]);
+    }
+
+    async commitTransform(patch) {
+        const element = this.selectedElement();
+        if (!element || !this.slide) {
+            return;
+        }
+        const transform = Object.assign({}, element.transform, patch);
+        await this.applyEdit([
+            { op: "element.updateTransform", slideId: this.slide.id, elementId: element.id, transform },
+        ]);
+    }
+
+    async onChange(event) {
+        const target = event.target;
+        if (!target) {
+            return;
+        }
+        if (target.dataset && target.dataset.file === "image") {
+            const file = target.files && target.files[0];
+            target.value = "";
+            if (file) {
+                try {
+                    await this.addImage(file);
+                } catch (error) {
+                    this.fail(error);
+                }
+            }
+            return;
+        }
+        const field = target.dataset ? target.dataset.field : "";
+        if (!field) {
+            return;
+        }
+        const value = target.value;
+        try {
+            if (field === "savePath") {
+                this.savePath = value;
+                return;
+            }
+            if (field === "notes") {
+                if (this.slide) {
+                    this.slide = Object.assign({}, this.slide, { notes: value });
+                }
+                return;
+            }
+            if (field === "slide-title") {
+                if (this.slide) {
+                    await this.applyEdit([{ op: "slide.setTitle", slideId: this.slide.id, text: value }]);
+                }
+                return;
+            }
+            const element = this.selectedElement();
+            if (!element || !this.slide) {
+                return;
+            }
+            if (field === "text") {
+                await this.applyEdit([
+                    { op: "element.setText", slideId: this.slide.id, elementId: element.id, text: value },
+                ]);
+                return;
+            }
+            if (field === "alt") {
+                await this.applyEdit([
+                    { op: "element.updateAlt", slideId: this.slide.id, elementId: element.id, alt: value },
+                ]);
+                return;
+            }
+            const number = Number.parseFloat(value);
+            if (!Number.isFinite(number)) {
+                return;
+            }
+            const patch = {};
+            if (field === "x") {
+                patch.xPt = number;
+            } else if (field === "y") {
+                patch.yPt = number;
+            } else if (field === "width") {
+                patch.widthPt = Math.max(4, number);
+            } else if (field === "height") {
+                patch.heightPt = Math.max(4, number);
+            } else if (field === "rotation") {
+                patch.rotationDeg = number;
+            } else {
+                return;
+            }
+            await this.commitTransform(patch);
+        } catch (error) {
+            this.fail(error);
+        }
+    }
+
+    onPointerDown(event) {
+        if (this.presenting) {
+            return;
+        }
+        const target = event.target;
+        if (!target || !target.closest) {
+            return;
+        }
+        const handle = target.closest("[data-handle]");
+        if (handle && this.selectedElement()) {
+            const element = this.selectedElement();
+            const point = this.toPoints(event.clientX, event.clientY);
+            this.drag = { mode: "resize", id: element.id, startX: point.x, startY: point.y, origin: Object.assign({}, element.transform) };
+            event.preventDefault();
+            return;
+        }
+        const holder = target.closest("[data-el-id]");
+        if (!holder || !holder.dataset.elId) {
+            return;
+        }
+        const element = this.slide ? this.slide.elements.find((item) => item.id === holder.dataset.elId) : null;
+        if (!element) {
+            return;
+        }
+        this.selectedId = element.id;
+        if (element.locked) {
+            return;
+        }
+        const point = this.toPoints(event.clientX, event.clientY);
+        this.drag = { mode: "move", id: element.id, startX: point.x, startY: point.y, origin: Object.assign({}, element.transform) };
+        event.preventDefault();
+    }
+
+    onPointerMove(event) {
+        if (!this.drag) {
+            return;
+        }
+        const point = this.toPoints(event.clientX, event.clientY);
+        const dx = point.x - this.drag.startX;
+        const dy = point.y - this.drag.startY;
+        const origin = this.drag.origin;
+        if (this.drag.mode === "move") {
+            this.dragRect = Object.assign({}, origin, { xPt: origin.xPt + dx, yPt: origin.yPt + dy });
+        } else {
+            this.dragRect = Object.assign({}, origin, {
+                widthPt: Math.max(8, origin.widthPt + dx),
+                heightPt: Math.max(8, origin.heightPt + dy),
+            });
+        }
+        this.dragTargetId = this.drag.id;
+    }
+
+    async onPointerUp() {
+        if (!this.drag) {
+            return;
+        }
+        const rect = this.dragRect;
+        const id = this.drag.id;
+        this.drag = null;
+        this.dragRect = null;
+        this.dragTargetId = "";
+        if (!rect || !this.slide || !id) {
+            return;
+        }
+        try {
+            await this.applyEdit([
+                { op: "element.updateTransform", slideId: this.slide.id, elementId: id, transform: rect },
+            ]);
+        } catch (error) {
+            this.fail(error);
+        }
+    }
+
+    toPoints(clientX, clientY) {
+        const selector = this.presenting ? "[data-present-stage]" : "[data-stage]";
+        const stage = document.querySelector(selector);
+        if (!stage) {
+            return { x: 0, y: 0 };
+        }
+        const rect = stage.getBoundingClientRect();
+        const scale = rect.width / this.deckWidth();
+        return { x: (clientX - rect.left) / scale, y: (clientY - rect.top) / scale };
+    }
+
+    onKeyDown(event) {
+        const target = event.target;
+        const typing = target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA");
+        if (this.presenting) {
+            if (event.key === "ArrowRight" || event.key === " ") {
+                event.preventDefault();
+                void this.presentStep(1);
+            } else if (event.key === "ArrowLeft") {
+                event.preventDefault();
+                void this.presentStep(-1);
+            } else if (event.key === "Escape") {
+                this.exitPresent();
+            }
+            return;
+        }
+        if (typing) {
+            return;
+        }
+        if (event.key === "Delete" || event.key === "Backspace") {
+            if (this.selectedElement()) {
+                event.preventDefault();
+                void this.deleteElement().catch((error) => this.fail(error));
+            }
+        } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+            event.preventDefault();
+            void this.save().catch((error) => this.fail(error));
+        }
+    }
+
+    enterPresent() {
+        if (!this.deck.slides.length) {
+            return;
+        }
+        this.presenting = true;
+        this.selectedId = "";
+        this.measure();
+        setTimeout(() => this.measure(), 0);
+    }
+
+    exitPresent() {
+        this.presenting = false;
+        this.measure();
+    }
+
+    async presentStep(delta) {
+        const slides = this.deck.slides;
+        const index = Math.max(0, slides.findIndex((item) => item.id === this.currentSlideId));
+        const next = Math.min(slides.length - 1, Math.max(0, index + delta));
+        if (slides[next] && slides[next].id !== this.currentSlideId) {
+            try {
+                await this.selectSlide(slides[next].id);
+            } catch (error) {
+                this.fail(error);
+            }
+        }
+    }
+}
+</script>

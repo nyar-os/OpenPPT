@@ -11,13 +11,22 @@
 #![deny(missing_docs)]
 
 use std::{
+    cell::RefCell,
     collections::HashMap,
-    sync::{Mutex, OnceLock},
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Instant,
 };
 
 use open_ppt_deck::{CreateRequest, EditableDeck as Deck, InspectCheck, ServiceError, SizeRequest};
 use serde_json::{Value, json};
-use wae::{CallContext, Error, JsValue, Result, function, register_module};
+use wae::{
+    CallContext, Error, JsValue, Result, function, optional_string_prop, register_module,
+    webview::{IpcHandler, IpcOutcome, IpcSink, OpenOptions, WebViewError, WebViewHost},
+};
 
 /// Live deck handles owned by this process.
 #[derive(Default)]
@@ -225,6 +234,15 @@ fn deck_assets(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &report)
 }
 
+/// Returns one embedded asset with base64 bytes for preview surfaces.
+#[function]
+fn deck_asset(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let asset = text(&ctx, 1)?;
+    let detail = with_deck(handle, |deck| open_ppt_deck::edit::asset_bytes(deck, &asset))?.map_err(fail)?;
+    respond(&ctx, &detail)
+}
+
 /// Restores the previous committed document.
 #[function]
 fn deck_undo(ctx: CallContext) -> Result<JsValue> {
@@ -251,6 +269,460 @@ fn deck_close(ctx: CallContext) -> Result<JsValue> {
     ctx.env().boolean(true)
 }
 
+// One WebView host per process, owned by the thread that opened it.
+thread_local! {
+    static GUI: RefCell<Option<GuiState>> = const { RefCell::new(None) };
+}
+
+const GUI_CLOSED: &str = "gui_closed";
+const GUI_HOST_EXITED: &str = "gui_host_exited";
+const GUI_NOT_OPEN: &str = "gui_not_open";
+
+struct GuiState {
+    host: WebViewHost,
+    backend: &'static str,
+    opened_at: Instant,
+    /// Set when the page asks the host to close, so a dead host is
+    /// distinguishable from one that never processed the request.
+    close_requested: Arc<AtomicBool>,
+}
+
+struct DeckIpcHandler {
+    close_requested: Arc<AtomicBool>,
+}
+
+impl IpcHandler for DeckIpcHandler {
+    fn on_ipc(&mut self, message: &str, _sink: &IpcSink) -> IpcOutcome {
+        let Ok(value) = serde_json::from_str::<Value>(message)
+        else {
+            return IpcOutcome::Ignored;
+        };
+        let ty = value.get("type").and_then(Value::as_str).unwrap_or("");
+        let id = value.get("id").cloned().unwrap_or(Value::Null);
+        match ty {
+            "close" => {
+                self.close_requested.store(true, Ordering::SeqCst);
+                IpcOutcome::CloseWindow
+            }
+            "ready" => reply(id, "readyResult", json!({ "version": env!("CARGO_PKG_VERSION"), "platform": platform_name() })),
+            "capabilities" => reply(id, "capabilitiesResult", json!({ "capabilities": open_ppt_deck::capabilities() })),
+            "deck.create" => {
+                let request = value.get("request").cloned().unwrap_or(Value::Null);
+                match call_create(&request) {
+                    Ok(result) => reply(id, "createResult", result),
+                    Err(message) => failure(id, "createError", message),
+                }
+            }
+            "deck.open" => {
+                let path = value.get("path").and_then(Value::as_str).unwrap_or("").trim().to_string();
+                if path.is_empty() {
+                    return failure(id, "openError", "an open request needs a project path".to_string());
+                }
+                match call_open(&path) {
+                    Ok(result) => reply(id, "openResult", result),
+                    Err(message) => failure(id, "openError", message),
+                }
+            }
+            "deck.summary" => match call_summary(handle_of(&value)) {
+                Ok(summary) => reply(id, "summaryResult", json!({ "deck": summary })),
+                Err(message) => failure(id, "summaryError", message),
+            },
+            "deck.slide" => {
+                let slide_id = value.get("slideId").and_then(Value::as_str).unwrap_or("");
+                match call_slide(handle_of(&value), slide_id) {
+                    Ok(slide) => reply(id, "slideResult", json!({ "slide": slide })),
+                    Err(message) => failure(id, "slideError", message),
+                }
+            }
+            "deck.assets" => {
+                let handle = handle_of(&value);
+                match deck_call(handle, open_ppt_deck::edit::assets) {
+                    Ok(assets) => reply(id, "assetsResult", assets),
+                    Err(message) => failure(id, "assetsError", message),
+                }
+            }
+            "deck.asset" => {
+                let asset_id = value.get("assetId").and_then(Value::as_str).unwrap_or("");
+                let handle = handle_of(&value);
+                match deck_service_call(handle, |deck| open_ppt_deck::edit::asset_bytes(deck, asset_id)) {
+                    Ok(asset) => reply(id, "assetResult", asset),
+                    Err(message) => failure(id, "assetError", message),
+                }
+            }
+            "deck.save" => {
+                let path = value.get("path").and_then(Value::as_str).unwrap_or("").trim().to_string();
+                if path.is_empty() {
+                    return failure(id, "saveError", "a save request needs a project path".to_string());
+                }
+                let overwrite = value.get("overwrite").and_then(Value::as_bool).unwrap_or(true);
+                match call_save(handle_of(&value), &path, overwrite) {
+                    Ok(report) => reply(id, "saveResult", json!({ "report": report })),
+                    Err(message) => failure(id, "saveError", message),
+                }
+            }
+            "deck.edit" => {
+                let request = value.get("request").cloned().unwrap_or(Value::Null);
+                match call_edit(handle_of(&value), &request) {
+                    Ok(report) => reply(id, "editResult", json!({ "report": report })),
+                    Err(message) => failure(id, "editError", message),
+                }
+            }
+            "deck.undo" => {
+                let handle = handle_of(&value);
+                match deck_call_mut(handle, open_ppt_deck::edit::undo) {
+                    Ok(report) => reply(id, "historyResult", json!({ "report": report })),
+                    Err(message) => failure(id, "historyError", message),
+                }
+            }
+            "deck.redo" => {
+                let handle = handle_of(&value);
+                match deck_call_mut(handle, open_ppt_deck::edit::redo) {
+                    Ok(report) => reply(id, "historyResult", json!({ "report": report })),
+                    Err(message) => failure(id, "historyError", message),
+                }
+            }
+            "deck.close" => {
+                let handle = handle_of(&value);
+                if remove(handle) {
+                    reply(id, "closedResult", json!({ "closed": true }))
+                }
+                else {
+                    failure(id, "closeError", "the deck handle is not open".to_string())
+                }
+            }
+            _ => IpcOutcome::Ignored,
+        }
+    }
+}
+
+fn reply(id: Value, kind: &str, payload: Value) -> IpcOutcome {
+    let mut body = payload;
+    body["type"] = Value::String(kind.to_string());
+    body["id"] = id;
+    IpcOutcome::ReplyToPage(body.to_string())
+}
+
+fn failure(id: Value, kind: &str, message: String) -> IpcOutcome {
+    reply(id, kind, json!({ "message": message }))
+}
+
+fn handle_of(value: &Value) -> u64 {
+    value.get("handle").and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn service_failure(error: ServiceError) -> String {
+    format!("{}: {}", error.code, error.message)
+}
+
+fn deck_call<T>(handle: u64, work: impl FnOnce(&Deck) -> T) -> std::result::Result<T, String> {
+    with_deck(handle, work).map_err(|error| error.to_string())
+}
+
+fn deck_call_mut<T>(handle: u64, work: impl FnOnce(&mut Deck) -> T) -> std::result::Result<T, String> {
+    with_deck_mut(handle, work).map_err(|error| error.to_string())
+}
+
+fn deck_service_call<T>(
+    handle: u64,
+    work: impl FnOnce(&Deck) -> std::result::Result<T, ServiceError>,
+) -> std::result::Result<T, String> {
+    match with_deck(handle, work) {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(error)) => Err(service_failure(error)),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn call_create(request: &Value) -> std::result::Result<Value, String> {
+    let slides = request["slides"]
+        .as_array()
+        .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .unwrap_or_default();
+    let deck = open_ppt_deck::create(CreateRequest {
+        title: request["title"].as_str().map(str::to_string),
+        size: parse_size(request).map_err(|error| error.to_string())?,
+        theme: request["theme"].as_str().map(str::to_string),
+        slides,
+    })
+    .map_err(service_failure)?;
+    let summary = open_ppt_deck::summary(&deck);
+    let handle = insert(deck);
+    Ok(json!({ "handle": handle, "deck": summary }))
+}
+
+fn call_open(path: &str) -> std::result::Result<Value, String> {
+    let deck = open_ppt_deck::open(Path::new(path)).map_err(service_failure)?;
+    let summary = open_ppt_deck::summary(&deck);
+    let handle = insert(deck);
+    Ok(json!({ "handle": handle, "deck": summary }))
+}
+
+fn call_summary(handle: u64) -> std::result::Result<Value, String> {
+    deck_call(handle, open_ppt_deck::summary)
+}
+
+fn call_slide(handle: u64, slide_id: &str) -> std::result::Result<Value, String> {
+    deck_service_call(handle, |deck| open_ppt_deck::edit::slide_detail(deck, slide_id))
+}
+
+fn call_save(handle: u64, path: &str, overwrite: bool) -> std::result::Result<Value, String> {
+    match with_deck(handle, |deck| {
+        open_ppt_deck::save(deck, Path::new(path), overwrite)
+            .map(|bytes| json!({ "path": path, "revision": deck.revision(), "slides": deck.slides().len(), "bytes": bytes }))
+    }) {
+        Ok(Ok(report)) => Ok(report),
+        Ok(Err(error)) => Err(service_failure(error)),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn call_edit(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    match with_deck_mut(handle, |deck| open_ppt_deck::edit::edit(deck, request)) {
+        Ok(Ok(report)) => Ok(report),
+        Ok(Err(error)) => Err(service_failure(error)),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn platform_name() -> &'static str {
+    if cfg!(windows) {
+        "win32"
+    }
+    else if cfg!(target_os = "macos") {
+        "darwin"
+    }
+    else {
+        "linux"
+    }
+}
+
+fn gui_status(
+    state: &'static str,
+    code: Option<&'static str>,
+    backend: Option<&'static str>,
+    uptime_ms: u64,
+    message: Option<String>,
+) -> Value {
+    json!({
+        "state": state,
+        "code": code,
+        "backend": backend,
+        "platform": platform_name(),
+        "uptimeMs": uptime_ms,
+        "message": message,
+    })
+}
+
+fn gui_open_result(ok: bool, status: Value, error: Option<&WebViewError>) -> Value {
+    let (stage, hresult, attempted) = match error {
+        Some(error) => {
+            let attempted = match error {
+                WebViewError::Host(host) => host.attempted.clone(),
+                _ => Vec::new(),
+            };
+            (error.stage(), error.hresult(), attempted)
+        }
+        None => (None, None, Vec::new()),
+    };
+    json!({
+        "ok": ok,
+        "status": status,
+        "stage": stage,
+        "hresult": hresult,
+        "attempted": attempted,
+    })
+}
+
+/// Resolves the GUI content directory: explicit override, then the built tree.
+fn resolve_gui_dir() -> Option<PathBuf> {
+    if let Ok(value) = std::env::var("OPEN_PPT_GUI") {
+        let path = PathBuf::from(value);
+        if path.is_dir() {
+            return Some(path);
+        }
+        if path.is_file() {
+            return path.parent().map(Path::to_path_buf);
+        }
+    }
+
+    let manifest_relative = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("projects")
+        .join("packages")
+        .join("open-ppt")
+        .join("dist")
+        .join("gui");
+    if manifest_relative.join("index.html").is_file() {
+        return Some(manifest_relative);
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        for candidate in [cwd.join("projects/packages/open-ppt/dist/gui"), cwd.join("dist/gui"), cwd.join("gui")] {
+            if candidate.join("index.html").is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// Opens the OpenPPT WebView window, or focuses the live one.
+#[function(js_name = "openGui")]
+fn open_gui(ctx: CallContext) -> Result<JsValue> {
+    let mut title = "OpenPPT".to_string();
+    let mut content_dir: Option<String> = None;
+    let mut width = 1280i32;
+    let mut height = 820i32;
+
+    if let Some(arg) = ctx.args().first().copied()
+        && !arg.is_undefined()?
+    {
+        if let Some(value) = optional_string_prop(arg, "title")? {
+            title = value;
+        }
+        if let Some(value) = optional_string_prop(arg, "contentDir")? {
+            content_dir = Some(value);
+        }
+        if let Ok(value) = arg.get_named("width")
+            && let Ok(number) = value.as_i64()
+        {
+            width = number as i32;
+        }
+        if let Ok(value) = arg.get_named("height")
+            && let Ok(number) = value.as_i64()
+        {
+            height = number as i32;
+        }
+    }
+
+    let live = GUI.with(|slot| {
+        let guard = slot.borrow();
+        guard
+            .as_ref()
+            .filter(|state| state.host.is_alive())
+            .map(|state| (state.backend, state.opened_at.elapsed().as_millis() as u64))
+    });
+    if let Some((backend, uptime_ms)) = live {
+        GUI.with(|slot| {
+            if let Some(state) = slot.borrow_mut().as_mut() {
+                let _ = state.host.focus();
+            }
+        });
+        let status = gui_status("open", None, Some(backend), uptime_ms, None);
+        return respond(&ctx, &gui_open_result(true, status, None));
+    }
+    GUI.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+
+    let dir = match content_dir {
+        Some(dir) => PathBuf::from(dir),
+        None => match resolve_gui_dir() {
+            Some(dir) => dir,
+            None => {
+                let status = gui_status(
+                    "failed",
+                    Some("gui_content_missing"),
+                    None,
+                    0,
+                    Some("the WebView content directory is missing; build the GUI first".to_string()),
+                );
+                return respond(&ctx, &gui_open_result(false, status, None));
+            }
+        },
+    };
+
+    let close_requested = Arc::new(AtomicBool::new(false));
+    let mut options = OpenOptions::from_content_dir(dir.display().to_string(), title);
+    options.width = width;
+    options.height = height;
+    options.accept_file_drop = true;
+
+    match WebViewHost::open(options, Box::new(DeckIpcHandler { close_requested: Arc::clone(&close_requested) })) {
+        Ok(host) => {
+            let backend = host.backend_name();
+            GUI.with(|slot| {
+                *slot.borrow_mut() = Some(GuiState { host, backend, opened_at: Instant::now(), close_requested });
+            });
+            let status = gui_status("open", None, Some(backend), 0, None);
+            respond(&ctx, &gui_open_result(true, status, None))
+        }
+        Err(error) => {
+            let status = gui_status("failed", error.code(), None, 0, Some(error.to_string()));
+            respond(&ctx, &gui_open_result(false, status, Some(&error)))
+        }
+    }
+}
+
+/// Pumps the host message loop once and reports the observed lifecycle state.
+#[function(js_name = "pumpEvents")]
+fn pump_events(ctx: CallContext) -> Result<JsValue> {
+    let status = GUI.with(|slot| {
+        let mut guard = slot.borrow_mut();
+        let Some(state) = guard.as_mut()
+        else {
+            return gui_status("closed", Some(GUI_NOT_OPEN), None, 0, Some("no OpenPPT window is open".to_string()));
+        };
+        let backend = state.backend;
+        let uptime_ms = state.opened_at.elapsed().as_millis() as u64;
+        if state.host.pump() {
+            return gui_status("open", None, Some(backend), uptime_ms, None);
+        }
+        let requested = state.close_requested.swap(false, Ordering::SeqCst);
+        *guard = None;
+        if requested {
+            gui_status("closed", Some(GUI_CLOSED), Some(backend), uptime_ms, None)
+        }
+        else {
+            gui_status(
+                "closed",
+                Some(GUI_HOST_EXITED),
+                Some(backend),
+                uptime_ms,
+                Some(format!("the {backend} webview host stopped without a page close request")),
+            )
+        }
+    });
+    respond(&ctx, &status)
+}
+
+/// Closes the OpenPPT window; the result distinguishes "already closed".
+#[function(js_name = "closeGui")]
+fn close_gui(ctx: CallContext) -> Result<JsValue> {
+    let result = GUI.with(|slot| {
+        let mut guard = slot.borrow_mut();
+        let Some(state) = guard.as_mut()
+        else {
+            return json!({
+                "closed": false,
+                "status": gui_status("not_open", Some(GUI_NOT_OPEN), None, 0, Some("no OpenPPT window is open".to_string())),
+            });
+        };
+        let backend = state.backend;
+        let uptime_ms = state.opened_at.elapsed().as_millis() as u64;
+        match state.host.close() {
+            Ok(()) => {
+                *guard = None;
+                json!({ "closed": true, "status": gui_status("closed", None, Some(backend), uptime_ms, None) })
+            }
+            Err(error) => json!({
+                "closed": false,
+                "status": gui_status("open", Some("gui_close_failed"), Some(backend), uptime_ms, Some(error.to_string())),
+            }),
+        }
+    });
+    respond(&ctx, &result)
+}
+
+/// Reports whether the OpenPPT window is alive.
+#[function(js_name = "isGuiOpen")]
+fn is_gui_open(ctx: CallContext) -> Result<JsValue> {
+    let open = GUI.with(|slot| slot.borrow().as_ref().is_some_and(|state| state.host.is_alive()));
+    ctx.env().boolean(open)
+}
+
 register_module![
     version,
     capabilities,
@@ -263,7 +735,12 @@ register_module![
     deck_edit,
     deck_slide,
     deck_assets,
+    deck_asset,
     deck_undo,
     deck_redo,
-    deck_close
+    deck_close,
+    open_gui,
+    pump_events,
+    close_gui,
+    is_gui_open
 ];

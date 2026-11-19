@@ -1,0 +1,76 @@
+<template>
+    <div class="studio-root">
+        <slot />
+    </div>
+</template>
+
+<style>
+:root {
+    --op-bg: #f5f0e6;
+    --op-surface: #fffcf6;
+    --op-surface-2: #efe7d9;
+    --op-ink: #1d1a16;
+    --op-muted: #6d6458;
+    --op-line: #d9cebc;
+    --op-accent: #a8451f;
+    --op-accent-soft: #f2ddd2;
+    --op-teal: #1f5b52;
+    --op-danger: #8c2f2f;
+    --op-radius: 10px;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+}
+
+body {
+    background: var(--op-bg);
+    color: var(--op-ink);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+}
+
+h1,
+h2,
+h3 {
+    margin: 0;
+    font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+
+button {
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+}
+
+input,
+textarea,
+select {
+    font: inherit;
+    color: inherit;
+}
+
+.studio-root {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+</style>
+
+<script client>
+export default class Application {}
+</script>

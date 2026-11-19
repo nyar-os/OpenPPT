@@ -9,8 +9,18 @@
     "repository": "https://github.com/nyar-os/OpenPPT",
     "scripts": {
         "check:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
-        "build:ts": "pnpm -r --filter \"./projects/packages/*\" run build",
+        "build:napi": "wae native build",
+        "build:ts": "pnpm --filter @wae/open-ppt run build",
+        "build:ui": "pnpm --filter @wae/open-ppt-ui run build",
+        "build": "wae build",
+        "stage:native": "wae native stage",
         "typecheck": "pnpm -r --filter \"./projects/packages/*\" run typecheck",
-        "test": "pnpm -r --filter \"./projects/packages/*\" run test"
+        "test": "pnpm -r --filter \"./projects/packages/*\" run test",
+        "gui": "pnpm run build && pnpm --filter @wae/open-ppt exec node ./dist/cli.js gui"
+    },
+    "devDependencies": {
+        "@types/node": "^22.20.4",
+        "@wae/wae": "0.0.6",
+        "typescript": "^5.9.2"
     }
 }

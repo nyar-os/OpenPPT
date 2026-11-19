@@ -8,17 +8,22 @@
  */
 
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { createCli } from '@wae/commander';
 
 import * as service from './service.js';
+import { runGui } from './gui.js';
 import type { DeckSummary, PlayFrame } from './service.js';
 import type { InspectCheck, InspectReport, OpenPPTCapabilities } from './types.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 const cli = createCli('open-ppt').locales(path.join(here, '..', 'locales')).intro('cli.intro');
+
+// Exported for contract audits that import the built entry to inspect the
+// command tree. Nothing runs until the file is executed as the program entry.
+export { cli };
 
 interface ParsedOptions {
     readonly _?: readonly string[];
@@ -162,5 +167,20 @@ cli.command('play', 'cli.cmd.play').actionCtx(async (options, _args, ctx) => {
     return 0;
 });
 
-const code = await cli.parse(process.argv);
-process.exitCode = code;
+cli.command('gui', 'cli.cmd.gui').actionCtx(async (_options, _args, ctx) => {
+    try {
+        const status = await runGui({});
+        ctx.emitResult(status, `window ${status.state}`);
+        return 0;
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.fail('open-ppt.cli.gui-failed', { message });
+        return 1;
+    }
+});
+
+const entry = process.argv[1];
+if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
+    const code = await cli.parse(process.argv);
+    process.exitCode = code;
+}
