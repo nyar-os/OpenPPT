@@ -13,4 +13,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 open-ppt-deck = { path = "../deck" }
+serde_json = { workspace = true }
 wae = { workspace = true }

@@ -13,10 +13,11 @@ use std::{
 };
 
 use document_presentation::authored::{
-    Deck, DeckCreateOptions, DeckError, DeckSize, InspectCheck, InspectOptions, Severity, SlideAddOptions, decode_project,
-    encode_project,
+    Deck, DeckCreateOptions, DeckError, DeckSize, InspectOptions, Severity, SlideAddOptions, decode_project, encode_project,
 };
 use serde_json::{Map, Value, json};
+
+pub use document_presentation::authored::{Deck as EditableDeck, InspectCheck};
 
 /// Formats the product must classify, even while none is implemented.
 const PRESENTATION_FORMATS: &[&str] = &[
