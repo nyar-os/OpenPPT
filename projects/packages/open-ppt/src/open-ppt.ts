@@ -8,7 +8,7 @@
 
 import { NotImplementedError, OpenPPTError } from './errors.js';
 import { Deck } from './deck.js';
-import { nativeBinding } from './native.js';
+import * as service from './service.js';
 import type {
     DeckCreateOptions,
     DeckInput,
@@ -39,21 +39,7 @@ export class OpenPPT {
      */
     async capabilities(): Promise<OpenPPTCapabilities> {
         this.assertActive();
-        const native = nativeBinding();
-        if (!native) {
-            throw new NotImplementedError('capabilities');
-        }
-        let matrix: unknown;
-        try {
-            matrix = JSON.parse(native.capabilities());
-        } catch (error) {
-            throw new OpenPPTError('format/invalid-package', 'the native addon returned an unreadable capability matrix', {
-                recoverable: false,
-                details: { feature: 'capabilities' },
-                cause: error,
-            });
-        }
-        return matrix as OpenPPTCapabilities;
+        return service.capabilities();
     }
 
     /** Creates an empty deck with its own handle. */

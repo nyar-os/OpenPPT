@@ -9,6 +9,10 @@ importers:
   .: {}
 
   projects/packages/open-ppt:
+    dependencies:
+      '@wae/commander':
+        specifier: 0.0.7
+        version: 0.0.7
     devDependencies:
       '@types/node':
         specifier: ^22.20.4
@@ -36,6 +40,10 @@ packages:
   '@types/node@22.20.5':
     resolution: {integrity: sha512-U2+DNr+wSjpsTS/wZGYHq7GcwfuSmKiKvoPvK22zwTlRhU91yOniN4qRR5KhIjvif7ysw/dz/hKmfDH0Ris4aA==}
 
+  '@wae/commander@0.0.7':
+    resolution: {integrity: sha512-9YvQuL64SDEJb7MzG6h0ZysEHHRhRkV+aMIIUuCyoKRkhw9prLAfYrWhXKwZfFVCPMWyAF1KS9ulozNCzq1zow==}
+    engines: {node: '>=20'}
+
   typescript@5.9.3:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
     engines: {node: '>=14.17'}
@@ -49,6 +57,8 @@ snapshots:
   '@types/node@22.20.5':
     dependencies:
       undici-types: 6.21.0
+
+  '@wae/commander@0.0.7': {}
 
   typescript@5.9.3: {}
 

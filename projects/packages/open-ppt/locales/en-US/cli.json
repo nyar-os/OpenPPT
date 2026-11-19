@@ -1,0 +1,20 @@
+{
+    "cli": {
+        "intro": "OpenPPT — create, inspect and play editable presentation decks on one native model.",
+        "cmd": {
+            "capabilities": "Print what this build supports, honestly",
+            "create": "Create a native deck and save it to a project file",
+            "open": "Open a project file and print its committed revision and slides",
+            "inspect": "Run geometry and rule checks on a project file",
+            "play": "Walk the static show of a project file"
+        },
+        "opt": {
+            "out": "Project file to write",
+            "title": "Deck title",
+            "size": "Slide ratio: 16:9, 4:3 or 16:10",
+            "slide": "Add a slide with this title (repeatable)",
+            "overwrite": "Replace the output file when it already exists",
+            "checks": "Comma-separated checks: overflow, contrast, alignment, assets, fonts, out-of-bounds"
+        }
+    }
+}

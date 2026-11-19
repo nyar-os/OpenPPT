@@ -10,13 +10,17 @@ import { createRequire } from 'node:module';
 
 const requireNative = createRequire(import.meta.url);
 
-/** Functions exported by the built addon. */
+/** Orthogonal exports of the built addon. Every call returns a JSON string. */
 export interface NativeBinding {
     version(): string;
     capabilities(): string;
-    create(...args: unknown[]): unknown;
-    open(...args: unknown[]): unknown;
-    inspect(...args: unknown[]): unknown;
+    deck_create(requestJson: string): string;
+    deck_open(path: string): string;
+    deck_summary(handle: number): string;
+    deck_save(handle: number, path: string, overwrite: boolean): string;
+    deck_inspect(handle: number, checksJson?: string): string;
+    deck_play(handle: number): string;
+    deck_close(handle: number): boolean;
 }
 
 let cached: NativeBinding | null | undefined;
