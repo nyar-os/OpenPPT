@@ -1,9 +1,24 @@
 /**
  * Authoring surface of `@wae/open-ppt`.
  *
- * Scaffold only. `new OpenPPT(options?)`, the editable deck model, playback,
- * PPTX exchange and delivery tasks are specified but not implemented, so this
- * module intentionally exports no authoring API. Implementations belong to the
- * shared Rust capability tree, never to this package.
+ * Everything here is a declared contract: the session, deck handle and format
+ * registry exist, while every capability rejects with
+ * `capability/not-implemented` until the shared engine lands. Domain rules,
+ * layout, rendering and PPTX exchange belong upstream and are never
+ * re-implemented in this package.
  */
-export {};
+
+export { Deck } from './deck.js';
+export { OpenPPT } from './open-ppt.js';
+export { NotImplementedError, OpenPPTError, errorCodes, isOpenPPTError } from './errors.js';
+export type { OpenPPTErrorCode, OpenPPTErrorDetails, OpenPPTErrorOptions } from './errors.js';
+export { defaultIntentFor, formatFromPath, formatInfo, formatRegistry, presentationFormats } from './formats.js';
+export type {
+    DeckIntent,
+    FormatFamily,
+    FormatMarkup,
+    FormatOpenKind,
+    PresentationFormat,
+    PresentationFormatInfo,
+} from './formats.js';
+export type * from './types.js';

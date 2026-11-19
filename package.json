@@ -10,6 +10,7 @@
     "scripts": {
         "check:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
         "build:ts": "pnpm -r --filter \"./projects/packages/*\" run build",
-        "typecheck": "pnpm -r --filter \"./projects/packages/*\" run typecheck"
+        "typecheck": "pnpm -r --filter \"./projects/packages/*\" run typecheck",
+        "test": "pnpm -r --filter \"./projects/packages/*\" run test"
     }
 }

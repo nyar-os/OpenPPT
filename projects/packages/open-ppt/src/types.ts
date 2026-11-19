@@ -1,0 +1,594 @@
+/**
+ * Authoring types of `@wae/open-ppt`.
+ *
+ * This is the frozen P0 shape of the authoring surface: `new OpenPPT(options?)`
+ * creates a session, `create`/`open` return an editable `Deck`, and every deck,
+ * slide and element carries a stable ID plus a revision.
+ *
+ * Geometry in the authoring surface is points. The engine stores EMU internally
+ * (`1pt = 12700 EMU`); screen pixels never enter the model.
+ */
+
+import type { DeckIntent, PresentationFormat } from './formats.js';
+
+/** Opaque deck identity. */
+export type DeckId = string;
+/** Opaque slide identity; the index is order only. */
+export type SlideId = string;
+/** Opaque element identity. */
+export type ElementId = string;
+/** Opaque master identity. */
+export type MasterId = string;
+/** Opaque layout identity. */
+export type LayoutId = string;
+/** Opaque theme identity. */
+export type ThemeId = string;
+/** Opaque asset identity. */
+export type AssetId = string;
+
+/** One font file the engine may use for measurement and rendering. */
+export interface FontSource {
+    readonly family: string;
+    readonly path?: string;
+    readonly bytes?: Uint8Array;
+}
+
+/** Host-provided font lookup. Missing families must be reported, not swapped silently. */
+export interface FontResolver {
+    resolve(request: { readonly family: string; readonly weight?: number; readonly italic?: boolean }): FontSource | undefined;
+}
+
+/** Reference to external asset bytes. */
+export interface AssetReference {
+    readonly name: string;
+    readonly mediaType?: string;
+    readonly sha256?: string;
+}
+
+/** Host-provided asset lookup used when a deck references bytes it does not embed. */
+export interface AssetResolver {
+    resolve(reference: AssetReference): Uint8Array | Promise<Uint8Array>;
+}
+
+/** Hard limits applied before work starts. */
+export interface ResourceBudgets {
+    readonly maxPackageBytes?: number;
+    readonly maxAssetBytes?: number;
+    readonly maxSlides?: number;
+}
+
+/** Structured diagnostic emitted during import, inspection, render or export. */
+export interface DeckDiagnostic {
+    readonly code: string;
+    readonly severity: 'info' | 'warning' | 'error';
+    readonly revision: number;
+    readonly slideId?: SlideId;
+    readonly elementId?: ElementId;
+    readonly recoverable: boolean;
+    readonly message: string;
+}
+
+/** Session options. Constructing a session opens no window, file or socket. */
+export interface OpenPPTOptions {
+    /** BCP-47 tag used for diagnostics and default copy. Defaults to `en`. */
+    readonly locale?: string;
+    readonly fonts?: FontResolver | readonly FontSource[];
+    readonly assets?: AssetResolver;
+    readonly budgets?: ResourceBudgets;
+    readonly diagnostics?: (event: DeckDiagnostic) => void;
+}
+
+/** Disclosure level. `partial` always ships a loss path and diagnostic codes. */
+export type SupportLevel = 'supported' | 'partial' | 'unsupported';
+
+/** Inspection rules understood by `deck.inspect()`. */
+export type InspectCheck = 'overflow' | 'contrast' | 'alignment' | 'assets' | 'fonts' | 'out-of-bounds';
+
+/** Per-page render targets. */
+export type RenderFormat = 'svg' | 'png' | 'pdf';
+
+/**
+ * Formats `deck.export()` can write.
+ *
+ * `.pptx`, `.ppsx` and `.potx` share one OOXML package writer and differ only in
+ * content type and show/template semantics; `.pdf` is a lossy static projection.
+ */
+export type ExportFormat = 'pptx' | 'ppsx' | 'potx' | 'pdf' | 'odp';
+
+/** What the installed engine can do, per format and per capability. */
+export interface FormatCapability {
+    readonly import: SupportLevel;
+    readonly edit: SupportLevel;
+    readonly export: SupportLevel;
+    readonly playback: SupportLevel;
+    /** Codes reported when a `partial` path loses something. */
+    readonly lossCodes: readonly string[];
+}
+
+/** Playback coverage, disclosed separately from static page rendering. */
+export interface PlaybackCapability {
+    readonly staticSlides: SupportLevel;
+    readonly builds: SupportLevel;
+    readonly transitions: SupportLevel;
+    readonly media: SupportLevel;
+}
+
+/** Result of `OpenPPT.capabilities()`. Read this instead of assuming a method works. */
+export interface OpenPPTCapabilities {
+    readonly engine: { readonly package: string; readonly version: string };
+    readonly formats: Readonly<Record<PresentationFormat, FormatCapability>>;
+    readonly checks: Readonly<Record<InspectCheck, SupportLevel>>;
+    readonly renderers: Readonly<Record<RenderFormat, SupportLevel>>;
+    readonly exportTargets: Readonly<Record<ExportFormat, SupportLevel>>;
+    readonly playback: PlaybackCapability;
+}
+
+/** Explicit slide size in points. */
+export interface CustomDeckSize {
+    readonly widthPt: number;
+    readonly heightPt: number;
+}
+
+/** Named ratios or an explicit point size. */
+export type DeckSize = '16:9' | '4:3' | '16:10' | CustomDeckSize;
+
+/** Minimal theme definition accepted by `create()` and `themes.apply()`. */
+export interface ThemeDefinition {
+    readonly name: string;
+    readonly fonts?: Readonly<Record<string, string>>;
+    readonly colors?: Readonly<Record<string, string>>;
+}
+
+/** Options of `OpenPPT.create()`. */
+export interface DeckCreateOptions {
+    readonly title?: string;
+    readonly size?: DeckSize;
+    readonly theme?: ThemeId | ThemeDefinition;
+}
+
+/**
+ * Input of `OpenPPT.open()`.
+ *
+ * Exactly one of `path`, `bytes` or `project` must be present, so the engine
+ * never guesses whether a string is a file name or serialized content.
+ */
+export type DeckInput =
+    | { readonly path: string; readonly intent?: DeckIntent }
+    | { readonly bytes: Uint8Array; readonly filename?: string; readonly intent?: DeckIntent }
+    | { readonly project: string; readonly intent?: DeckIntent };
+
+/** Point-based placement of an element on a slide. */
+export interface Transform {
+    readonly xPt: number;
+    readonly yPt: number;
+    readonly widthPt: number;
+    readonly heightPt: number;
+    readonly rotationDeg?: number;
+}
+
+/** One styled run inside a paragraph. */
+export interface TextRun {
+    readonly text: string;
+    readonly bold?: boolean;
+    readonly italic?: boolean;
+    readonly underline?: boolean;
+    readonly strike?: boolean;
+    readonly sizePt?: number;
+    readonly color?: string;
+    readonly fontFamily?: string;
+    readonly hyperlink?: string;
+}
+
+/** One paragraph. `runs` and `text` are mutually exclusive. */
+export interface TextParagraph {
+    readonly runs?: readonly TextRun[];
+    readonly text?: string;
+    readonly level?: number;
+    readonly align?: 'left' | 'center' | 'right' | 'justify';
+}
+
+/** Rich text content of a text target. */
+export interface RichText {
+    readonly paragraphs: readonly TextParagraph[];
+}
+
+/** Accepted text input: plain string or structured paragraphs. */
+export type TextInput = string | RichText;
+
+/** How text that does not fit is handled. Never silently shrinks below readability. */
+export interface TextSetOptions {
+    readonly fit?: 'shrink' | 'wrap' | 'clip' | 'error';
+    readonly expectedRevision?: number;
+}
+
+/** Readable and writable text slot, e.g. `slide.title` or `slide.notes`. */
+export interface TextTarget {
+    get(): Promise<string>;
+    set(text: TextInput, options?: TextSetOptions): Promise<void>;
+}
+
+/** Element kinds the model distinguishes. */
+export type ElementKind = 'text' | 'image' | 'shape' | 'group' | 'table' | 'chart' | 'formula' | 'media';
+
+/** Read-only view of an element. Updates go through `ElementsApi.update()`. */
+export interface Element {
+    readonly id: ElementId;
+    readonly kind: ElementKind;
+    readonly transform: Transform;
+    readonly alt: string | null;
+    readonly locked: boolean;
+}
+
+/** Binding to a layout placeholder. */
+export interface PlaceholderRef {
+    readonly layoutId: LayoutId;
+    readonly name: string;
+}
+
+/** Content sources accepted by media, image and asset inputs. */
+export type BytesSource = { readonly path: string } | { readonly bytes: Uint8Array; readonly mediaType?: string };
+
+/** Text element input. */
+export interface TextElementInput {
+    readonly text: TextInput;
+    readonly transform?: Transform;
+    readonly alt?: string;
+    readonly placeholder?: PlaceholderRef;
+}
+
+/** Image element input. `alt` is required for accessibility. */
+export interface ImageElementInput {
+    readonly source: AssetId | BytesSource;
+    readonly transform?: Transform;
+    readonly alt: string;
+    readonly placeholder?: PlaceholderRef;
+}
+
+/** Preset shape input. `geometry` is a preset name such as `rect` or `roundRect`. */
+export interface ShapeElementInput {
+    readonly geometry: string;
+    readonly transform?: Transform;
+    readonly fill?: string;
+    readonly line?: { readonly color?: string; readonly widthPt?: number };
+    readonly alt?: string;
+}
+
+/** Table cell input. */
+export interface TableCell {
+    readonly text?: TextInput;
+    readonly fill?: string;
+}
+
+/** Table element input; rows must share the same column count. */
+export interface TableElementInput {
+    readonly rows: readonly (readonly TableCell[])[];
+    readonly transform?: Transform;
+    readonly alt?: string;
+}
+
+/** Chart families kept editable as data, not as a rendered bitmap. */
+export type ChartType = 'column' | 'bar' | 'line' | 'area' | 'pie' | 'doughnut' | 'scatter' | 'radar';
+
+/** One chart series. */
+export interface ChartSeries {
+    readonly name: string;
+    readonly values: readonly number[];
+}
+
+/** Editable chart data. */
+export interface ChartData {
+    readonly categories: readonly string[];
+    readonly series: readonly ChartSeries[];
+}
+
+/** Chart element input. */
+export interface ChartElementInput {
+    readonly type: ChartType;
+    readonly data: ChartData;
+    readonly alt: string;
+    readonly transform?: Transform;
+}
+
+/** Formula element input. `expression` keeps the source, not only the picture. */
+export interface FormulaElementInput {
+    readonly expression: string;
+    readonly alt?: string;
+    readonly transform?: Transform;
+}
+
+/** Audio or video element input. */
+export interface MediaElementInput {
+    readonly kind: 'audio' | 'video';
+    readonly source: AssetId | BytesSource;
+    readonly alt: string;
+    readonly transform?: Transform;
+}
+
+/** Partial element update addressed by ID. */
+export interface ElementPatch {
+    readonly transform?: Transform;
+    readonly alt?: string;
+    readonly text?: TextInput;
+    readonly fill?: string;
+    readonly data?: ChartData;
+    readonly expectedRevision?: number;
+}
+
+/** Editable flags of an element. */
+export interface LockFlags {
+    readonly move?: boolean;
+    readonly resize?: boolean;
+    readonly style?: boolean;
+    readonly remove?: boolean;
+}
+
+/** Alignment commands for `ElementsApi.align()`. */
+export type Alignment = 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom';
+
+/** Stacking commands for `ElementsApi.zOrder()`. */
+export type ZOrder = 'front' | 'back' | 'forward' | 'backward';
+
+/** Element operations of one slide. */
+export interface ElementsApi {
+    addText(input: TextElementInput): Promise<Element>;
+    addImage(input: ImageElementInput): Promise<Element>;
+    addShape(input: ShapeElementInput): Promise<Element>;
+    addTable(input: TableElementInput): Promise<Element>;
+    addChart(input: ChartElementInput): Promise<Element>;
+    addFormula(input: FormulaElementInput): Promise<Element>;
+    addMedia(input: MediaElementInput): Promise<Element>;
+    get(elementId: ElementId): Promise<Element>;
+    update(elementId: ElementId, patch: ElementPatch): Promise<Element>;
+    remove(elementId: ElementId): Promise<void>;
+    group(elementIds: readonly ElementId[], options?: { readonly alt?: string }): Promise<Element>;
+    align(elementIds: readonly ElementId[], alignment: Alignment): Promise<void>;
+    distribute(elementIds: readonly ElementId[], axis: 'horizontal' | 'vertical'): Promise<void>;
+    zOrder(elementId: ElementId, order: ZOrder): Promise<void>;
+    lock(elementId: ElementId, flags: LockFlags): Promise<void>;
+}
+
+/** Options of `slides.add()`. */
+export interface SlideAddOptions {
+    readonly layout?: LayoutId;
+    readonly index?: number;
+}
+
+/** Compact slide listing for thumbnails and navigation. */
+export interface SlideSummary {
+    readonly id: SlideId;
+    readonly index: number;
+    readonly title: string;
+    readonly hidden: boolean;
+}
+
+/** One slide. `index` is order only; `id` is identity. */
+export interface Slide {
+    readonly id: SlideId;
+    readonly index: number;
+    readonly title: TextTarget;
+    readonly notes: TextTarget;
+    readonly elements: ElementsApi;
+    /** Hidden slides are skipped by playback but preserved on save. */
+    hidden: boolean;
+    layout: LayoutId | null;
+}
+
+/** Slide operations of a deck. */
+export interface SlidesApi {
+    add(options?: SlideAddOptions): Promise<Slide>;
+    get(slideId: SlideId): Promise<Slide>;
+    list(): Promise<readonly SlideSummary[]>;
+    reorder(slideIds: readonly SlideId[]): Promise<void>;
+    duplicate(slideId: SlideId, options?: { readonly index?: number }): Promise<Slide>;
+    remove(slideId: SlideId): Promise<void>;
+}
+
+/** Master summary. */
+export interface MasterInfo {
+    readonly id: MasterId;
+    readonly name: string;
+    readonly layoutIds: readonly LayoutId[];
+}
+
+/** Layout summary, including its placeholders. */
+export interface LayoutInfo {
+    readonly id: LayoutId;
+    readonly name: string;
+    readonly masterId: MasterId | null;
+    readonly placeholders: readonly string[];
+}
+
+/** Theme summary. */
+export interface ThemeInfo {
+    readonly id: ThemeId;
+    readonly name: string;
+}
+
+/** Master operations. Editing master content lands after the first editing gate. */
+export interface MastersApi {
+    list(): Promise<readonly MasterInfo[]>;
+}
+
+/** Layout operations. */
+export interface LayoutsApi {
+    list(masterId?: MasterId): Promise<readonly LayoutInfo[]>;
+}
+
+/** Theme operations. `.thmx` packages arrive through `import()`, never through `open()`. */
+export interface ThemesApi {
+    list(): Promise<readonly ThemeInfo[]>;
+    get(themeId: ThemeId): Promise<ThemeInfo>;
+    apply(theme: ThemeId | ThemeDefinition): Promise<ThemeInfo>;
+    import(input: { readonly path?: string; readonly bytes?: Uint8Array }): Promise<ThemeInfo>;
+}
+
+/** Asset summary. */
+export interface AssetInfo {
+    readonly id: AssetId;
+    readonly name: string;
+    readonly mediaType: string;
+    readonly bytes: number;
+    readonly sha256: string;
+    readonly license?: string;
+}
+
+/** Asset input; bytes are embedded in the native project. */
+export interface AssetInput {
+    readonly name: string;
+    readonly path?: string;
+    readonly bytes?: Uint8Array;
+    readonly mediaType?: string;
+    readonly license?: string;
+}
+
+/** Asset operations. */
+export interface AssetsApi {
+    list(): Promise<readonly AssetInfo[]>;
+    add(input: AssetInput): Promise<AssetInfo>;
+    remove(assetId: AssetId): Promise<void>;
+}
+
+/** Handle passed to `deck.transaction()`. Extended as editing lands. */
+export interface DeckTransaction {
+    /** Revision the transaction started from. */
+    readonly baseRevision: number;
+}
+
+/** Options of `deck.inspect()`. */
+export interface InspectOptions {
+    readonly checks?: readonly InspectCheck[];
+}
+
+/** One finding of an inspection run. */
+export interface InspectIssue {
+    readonly code: string;
+    readonly severity: 'info' | 'warning' | 'error';
+    readonly revision: number;
+    readonly slideId?: SlideId;
+    readonly elementId?: ElementId;
+    readonly recoverable: boolean;
+    readonly message: string;
+}
+
+/** Result of `deck.inspect()`. Geometry and rules only, never an aesthetic score. */
+export interface InspectReport {
+    readonly revision: number;
+    readonly checkerVersion: string;
+    readonly issues: readonly InspectIssue[];
+    readonly passed: boolean;
+}
+
+/** Options of `deck.render()`. */
+export interface RenderOptions {
+    readonly format: RenderFormat;
+    readonly pages?: 'all' | readonly number[];
+    readonly target?: string;
+    readonly scale?: number;
+}
+
+/** One rendered page. */
+export interface RenderPage {
+    readonly index: number;
+    readonly slideId: SlideId;
+    readonly path?: string;
+    readonly bytes?: number;
+}
+
+/** Result of `deck.render()`. */
+export interface RenderReport {
+    readonly revision: number;
+    readonly format: RenderFormat;
+    readonly pages: readonly RenderPage[];
+    readonly diagnostics: readonly DeckDiagnostic[];
+}
+
+/** Options of `deck.contactSheet()`. */
+export interface ContactSheetOptions {
+    readonly target?: string;
+    readonly format?: 'svg' | 'png';
+    readonly columns?: number;
+}
+
+/** Whole-deck overview used for visual review. */
+export interface ContactSheet {
+    readonly revision: number;
+    readonly slideIds: readonly SlideId[];
+    readonly path?: string;
+}
+
+/** How lossy export treats findings. */
+export type LossPolicy = 'error' | 'warn';
+
+/** Options of `deck.export()`. */
+export interface ExportOptions {
+    readonly format: ExportFormat;
+    readonly target: string;
+    readonly lossPolicy?: LossPolicy;
+    readonly overwrite?: boolean;
+}
+
+/** One thing a projection could not keep. */
+export interface ExportLoss {
+    readonly code: string;
+    readonly severity: 'warning' | 'error';
+    readonly slideId?: SlideId;
+    readonly elementId?: ElementId;
+    readonly message: string;
+}
+
+/** Result of `deck.export()`. Reports what the target actually kept. */
+export interface ExportReport {
+    readonly revision: number;
+    readonly format: ExportFormat;
+    readonly target: string;
+    readonly losses: readonly ExportLoss[];
+    readonly diagnostics: readonly DeckDiagnostic[];
+    /** False for projections such as PDF that cannot be reopened for editing. */
+    readonly editable: boolean;
+}
+
+/** Options of `deck.save()` (native project, not an exchange format). */
+export interface SaveOptions {
+    readonly target?: string;
+    readonly overwrite?: boolean;
+}
+
+/** Result of `deck.save()`. */
+export interface SaveReport {
+    readonly target: string;
+    readonly revision: number;
+    readonly bytes: number;
+}
+
+/** Options of `deck.playback.create()`. */
+export interface PlaybackOptions {
+    readonly startAt?: SlideId;
+    readonly fullscreen?: boolean;
+}
+
+/** Observable player state. */
+export interface PlayerState {
+    readonly revision: number;
+    readonly slideId: SlideId;
+    readonly buildStep: number;
+    readonly timeMs: number;
+    readonly playing: boolean;
+}
+
+/** Playback session. `next()` advances build steps before moving to the next slide. */
+export interface Player {
+    readonly state: PlayerState;
+    start(): Promise<void>;
+    pause(): Promise<void>;
+    resume(): Promise<void>;
+    next(): Promise<void>;
+    previous(): Promise<void>;
+    goTo(slideId: SlideId): Promise<void>;
+    stop(): Promise<void>;
+    dispose(): Promise<void>;
+}
+
+/** Playback entry point of a deck. */
+export interface PlaybackApi {
+    create(options?: PlaybackOptions): Promise<Player>;
+}
