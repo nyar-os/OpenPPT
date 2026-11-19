@@ -1,0 +1,16 @@
+{
+    "name": "@wae/open-ppt-linux-x64",
+    "version": "0.0.0",
+    "description": "Linux x64 native addon for @wae/open-ppt",
+    "license": "Apache-2.0",
+    "os": ["linux"],
+    "cpu": ["x64"],
+    "main": "open-ppt.linux-x64.node",
+    "files": ["open-ppt.linux-x64.node", "README.md", "License.md"],
+    "engines": { "node": ">=18" },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/nyar-os/OpenPPT.git",
+        "directory": "projects/packages/open-ppt-linux-x64"
+    }
+}
