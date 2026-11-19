@@ -1,0 +1,108 @@
+<template>
+    <footer class="site-footer">
+        <div class="site-footer__inner">
+            <div class="site-footer__brand">
+                <span class="site-footer__mark">OpenPPT</span>
+                <p class="site-footer__tag">
+                    Editable presentation decks for playback, visual editing and
+                    agent authoring.
+                </p>
+            </div>
+            <nav aria-label="Product" class="footer-group">
+                <b>Product</b>
+                <Link to="FeaturesPage">
+                    Features
+                </Link>
+                <Link to="AuthoringPage">
+                    Authoring
+                </Link>
+                <Link to="RoadmapPage">
+                    Roadmap
+                </Link>
+            </nav>
+            <nav aria-label="Project" class="footer-group">
+                <b>Project</b>
+                <a href="https://github.com/nyar-os/OpenPPT" rel="noopener">
+                    Source code
+                </a>
+                <a href="https://github.com/nyar-os/OpenPPT/issues" rel="noopener">
+                    Issues
+                </a>
+                <a href="https://github.com/nyar-os/OpenPPT/releases" rel="noopener">
+                    Releases
+                </a>
+            </nav>
+            <p class="site-footer__note">
+                MPL-2.0 licensed · Built with VMZ
+            </p>
+        </div>
+    </footer>
+</template>
+
+<style>
+.site-footer {
+    border-top: 1px solid var(--op-line);
+    background: var(--op-surface);
+    margin-top: 64px;
+}
+
+.site-footer__inner {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr;
+    gap: 32px;
+    max-width: var(--op-maxw);
+    margin: 0 auto;
+    padding: 40px 24px 32px;
+}
+
+.site-footer__mark {
+    font-family: "Iowan Old Style", Georgia, serif;
+    font-weight: 600;
+    font-size: 17px;
+}
+
+.site-footer__tag {
+    margin: 8px 0 0;
+    max-width: 320px;
+    color: var(--op-muted);
+    font-size: 14px;
+}
+
+.footer-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.footer-group b {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--op-muted);
+    margin-bottom: 4px;
+}
+
+.footer-group a {
+    color: var(--op-ink);
+    font-size: 14px;
+}
+
+.site-footer__note {
+    grid-column: 1 / -1;
+    margin: 8px 0 0;
+    padding-top: 16px;
+    border-top: 1px solid var(--op-line);
+    color: var(--op-muted);
+    font-size: 13px;
+}
+
+@media (max-width: 760px) {
+    .site-footer__inner {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+
+<script client>
+export default class SiteFooter {}
+</script>

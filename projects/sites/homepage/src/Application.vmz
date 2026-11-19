@@ -1,0 +1,159 @@
+<template>
+    <div class="app-root">
+        <slot />
+    </div>
+</template>
+
+<style>
+:root {
+    --op-bg: #f5f0e6;
+    --op-surface: #fffcf6;
+    --op-surface-2: #efe7d9;
+    --op-ink: #1d1a16;
+    --op-muted: #6d6458;
+    --op-line: #d9cebc;
+    --op-accent: #a8451f;
+    --op-accent-soft: #f2ddd2;
+    --op-teal: #1f5b52;
+    --op-radius: 10px;
+    --op-maxw: 1080px;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background: var(--op-bg);
+    color: var(--op-ink);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+    font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+}
+
+a {
+    color: var(--op-accent);
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+code {
+    padding: 2px 6px;
+    border-radius: 5px;
+    background: var(--op-surface-2);
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 0.9em;
+}
+
+.page-head {
+    padding: 40px 0 8px;
+}
+
+.page-head h1 {
+    margin: 0 0 10px;
+    font-size: 38px;
+}
+
+.lead {
+    max-width: 680px;
+    margin: 0;
+    color: var(--op-muted);
+    font-size: 17px;
+}
+
+.section {
+    margin-top: 40px;
+    padding-top: 28px;
+    border-top: 1px solid var(--op-line);
+}
+
+.section h2 {
+    margin: 0 0 10px;
+    font-size: 24px;
+}
+
+.section p {
+    max-width: 720px;
+    margin: 0 0 12px;
+}
+
+.section ul {
+    margin: 0;
+    padding-left: 20px;
+}
+
+.section li {
+    margin: 6px 0;
+}
+
+.tag {
+    display: inline-block;
+    padding: 2px 9px;
+    border: 1px solid var(--op-line);
+    border-radius: 999px;
+    color: var(--op-muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    vertical-align: middle;
+}
+
+.cta-line {
+    margin-top: 40px;
+    padding-top: 20px;
+    border-top: 1px solid var(--op-line);
+    color: var(--op-muted);
+}
+
+.btn {
+    display: inline-block;
+    padding: 11px 24px;
+    border-radius: var(--op-radius);
+    font-weight: 600;
+    font-size: 15px;
+}
+
+.btn:hover {
+    text-decoration: none;
+}
+
+.btn--primary {
+    background: var(--op-accent);
+    color: #fff8f2;
+}
+
+.btn--primary:hover {
+    background: #8f3a19;
+}
+
+.btn--ghost {
+    border: 1px solid var(--op-line);
+    color: var(--op-ink);
+}
+
+.btn--ghost:hover {
+    border-color: var(--op-accent);
+}
+</style>
+
+<script client>
+export default class Application {}
+</script>

@@ -1,0 +1,74 @@
+<template>
+    <SiteShell page="features">
+        <div class="page-head">
+            <h1>Features</h1>
+            <p class="lead">
+                Three lines share one deck model: playback, visual editing and
+                agent authoring. Nothing here is assumed from a file extension.
+            </p>
+        </div>
+
+        <section class="section">
+            <h2>Playback <span class="tag">static first</span></h2>
+            <ul>
+                <li>Open a deck and go full screen on the current display.</li>
+                <li>Page forward and back with the keyboard or mouse.</li>
+                <li>Hidden slides are skipped in the show but stay editable.</li>
+                <li>Speaker notes travel with each page.</li>
+                <li>Builds, media sync and transitions are added after the static loop.</li>
+            </ul>
+        </section>
+
+        <section class="section">
+            <h2>Editing</h2>
+            <ul>
+                <li>Pages, masters and layouts keep stable identities.</li>
+                <li>Text, images, shapes, tables, charts and formulas are native objects.</li>
+                <li>Edits run in transactions: a failed change leaves no half page behind.</li>
+                <li>Undo and redo step through revisions; save and reopen preserve them.</li>
+                <li>Concurrent edits are rejected with a revision conflict instead of silently overwriting.</li>
+            </ul>
+        </section>
+
+        <section class="section">
+            <h2>Agent authoring</h2>
+            <ul>
+                <li>Brief the agent with audience, purpose, duration, material and brand rules.</li>
+                <li>The agent plans the argument and the page order before drawing anything.</li>
+                <li>It picks a theme and semantic layouts, then fills native objects.</li>
+                <li>Rule checks report overflow, contrast, alignment and missing assets with locations.</li>
+                <li>Review happens per page; revisions target an object id and a revision.</li>
+            </ul>
+        </section>
+
+        <section class="section">
+            <h2>Format honesty</h2>
+            <p>
+                PPTX is the first exchange format, and it is never described as
+                “supported” just because a package opens. Each object family,
+                animation and style is classified as supported, partial or
+                unsupported, with the loss report attached. The legacy binary
+                <code>.ppt</code> format is a separate capability.
+            </p>
+        </section>
+
+        <p class="cta-line">
+            Want to see how a generated deck is reviewed?
+            <Link to="AuthoringPage">
+                Read the authoring workflow
+            </Link>
+        </p>
+    </SiteShell>
+</template>
+
+<script client>
+export default class FeaturesPage {
+    static meta() {
+        return {
+            title: "Features — OpenPPT",
+            description:
+                "Playback, visual editing and agent authoring on one editable deck model, with PPTX capabilities disclosed item by item.",
+        };
+    }
+}
+</script>
