@@ -8,10 +8,14 @@
  */
 
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import test from 'node:test';
 
 import { formatFromPath, formatInfo, OpenPPT, OpenPPTError, presentationFormats } from './index.js';
 import type { DeckInput } from './index.js';
+
+const addon = process.env.OPEN_PPT_NATIVE;
+const withAddon = addon !== undefined && existsSync(addon) ? 'a built addon is installed' : false;
 
 test('session construction is synchronous and side-effect free', async () => {
     const ppt = new OpenPPT();
@@ -21,7 +25,7 @@ test('session construction is synchronous and side-effect free', async () => {
     assert.equal(ppt.disposed, true);
 });
 
-test('declared capabilities reject with capability/not-implemented', async () => {
+test('without an installed addon engine calls keep capability/not-implemented', { skip: withAddon }, async () => {
     const ppt = new OpenPPT({ locale: 'zh-CN' });
     assert.equal(ppt.locale, 'zh-CN');
     const calls: (() => Promise<unknown>)[] = [

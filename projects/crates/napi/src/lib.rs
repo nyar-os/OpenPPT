@@ -15,7 +15,7 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-use open_ppt_deck::{CreateRequest, EditableDeck as Deck, InspectCheck, ServiceError};
+use open_ppt_deck::{CreateRequest, EditableDeck as Deck, InspectCheck, ServiceError, SizeRequest};
 use serde_json::{Value, json};
 use wae::{CallContext, Error, JsValue, Result, function, register_module};
 
@@ -69,6 +69,22 @@ fn handle(ctx: &CallContext, index: usize) -> Result<u64> {
     u64::try_from(raw).map_err(|_| Error::new("session/argument-invalid: the deck handle must be a non-negative integer"))
 }
 
+fn parse_size(request: &Value) -> Result<Option<SizeRequest>> {
+    match &request["size"] {
+        Value::Null => Ok(None),
+        Value::String(name) => Ok(Some(SizeRequest::Named(name.clone()))),
+        Value::Object(map) => {
+            let number = |key: &str| {
+                map.get(key)
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| Error::new(format!("session/argument-invalid: `size.{key}` must be a number in points")))
+            };
+            Ok(Some(SizeRequest::Points { width_pt: number("widthPt")?, height_pt: number("heightPt")? }))
+        }
+        _ => Err(Error::new("session/argument-invalid: `size` must be a named ratio or `{ widthPt, heightPt }`")),
+    }
+}
+
 fn respond(ctx: &CallContext, value: &Value) -> Result<JsValue> {
     let text = value.to_string();
     ctx.env().string(&text)
@@ -102,7 +118,8 @@ fn deck_create(ctx: CallContext) -> Result<JsValue> {
         .unwrap_or_default();
     let deck = open_ppt_deck::create(CreateRequest {
         title: request["title"].as_str().map(str::to_string),
-        size: request["size"].as_str().map(str::to_string),
+        size: parse_size(&request)?,
+        theme: request["theme"].as_str().map(str::to_string),
         slides,
     })
     .map_err(fail)?;
@@ -137,7 +154,7 @@ fn deck_save(ctx: CallContext) -> Result<JsValue> {
     let overwrite = ctx.args().get(2).map(|value| value.as_bool()).transpose()?.unwrap_or(false);
     let report = with_deck(handle, |deck| {
         open_ppt_deck::save(deck, std::path::Path::new(&path), overwrite)
-            .map(|()| json!({ "path": path, "revision": deck.revision(), "slides": deck.slides().len() }))
+            .map(|bytes| json!({ "path": path, "revision": deck.revision(), "slides": deck.slides().len(), "bytes": bytes }))
     })?
     .map_err(fail)?;
     respond(&ctx, &report)

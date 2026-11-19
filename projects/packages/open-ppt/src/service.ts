@@ -41,6 +41,7 @@ export interface SaveReport {
     readonly path: string;
     readonly revision: number;
     readonly slides: number;
+    readonly bytes: number;
 }
 
 /** One static playback frame. */
@@ -60,7 +61,8 @@ export interface PlayReport {
 /** Arguments of {@link create}. */
 export interface CreateDeckRequest {
     readonly title?: string;
-    readonly size?: string;
+    readonly size?: string | { readonly widthPt: number; readonly heightPt: number };
+    readonly theme?: string;
     readonly slides?: ReadonlyArray<string>;
 }
 
@@ -103,7 +105,9 @@ export function capabilities(): OpenPPTCapabilities {
 /** Creates a deck and returns its handle. */
 export function create(request: CreateDeckRequest): DeckHandle {
     return decode<DeckHandle>(() =>
-        binding('create').deck_create(JSON.stringify({ title: request.title, size: request.size, slides: request.slides ?? [] })),
+        binding('create').deck_create(
+            JSON.stringify({ title: request.title, size: request.size, theme: request.theme, slides: request.slides ?? [] }),
+        ),
     );
 }
 

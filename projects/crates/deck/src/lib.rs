@@ -99,27 +99,48 @@ pub fn capabilities() -> Value {
     })
 }
 
+/// Requested slide extent: a named ratio or explicit points.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SizeRequest {
+    /// Named ratio such as `16:9`.
+    Named(String),
+    /// Explicit extent in points.
+    Points {
+        /// Slide width in points.
+        width_pt: f64,
+        /// Slide height in points.
+        height_pt: f64,
+    },
+}
+
 /// Arguments of [`create`].
 #[derive(Debug, Clone, Default)]
 pub struct CreateRequest {
     /// Deck title.
     pub title: Option<String>,
-    /// Named slide extent such as `16:9`.
-    pub size: Option<String>,
+    /// Slide extent; absent keeps the engine default.
+    pub size: Option<SizeRequest>,
+    /// Theme name to start from.
+    pub theme: Option<String>,
     /// Titles of the slides to create, in order.
     pub slides: Vec<String>,
 }
 
 /// Creates a deck with one title slide per requested title.
 pub fn create(request: CreateRequest) -> Result<Deck, ServiceError> {
-    let size = match request.size.as_deref() {
+    let size = match &request.size {
         None => None,
-        Some(name) => Some(
+        Some(SizeRequest::Named(name)) => Some(
             DeckSize::named(name)
                 .ok_or_else(|| ServiceError::new("session/argument-invalid", format!("unknown slide size `{name}`")))?,
         ),
+        Some(SizeRequest::Points { width_pt, height_pt }) => {
+            Some(DeckSize::from_points(*width_pt, *height_pt).ok_or_else(|| {
+                ServiceError::new("session/argument-invalid", "custom slide size must use finite positive point values")
+            })?)
+        }
     };
-    let mut deck = Deck::create(DeckCreateOptions { title: request.title, size, theme_name: None });
+    let mut deck = Deck::create(DeckCreateOptions { title: request.title, size, theme_name: request.theme });
     if !request.slides.is_empty() {
         let layout = deck
             .layouts()
@@ -147,7 +168,7 @@ pub fn open(path: &Path) -> Result<Deck, ServiceError> {
 /// Writes a native project container through a temporary file and a rename.
 ///
 /// The input file is never overwritten unless `overwrite` is set.
-pub fn save(deck: &Deck, path: &Path, overwrite: bool) -> Result<(), ServiceError> {
+pub fn save(deck: &Deck, path: &Path, overwrite: bool) -> Result<usize, ServiceError> {
     if path.exists() && !overwrite {
         return Err(ServiceError::new(
             "io/exists",
@@ -166,7 +187,7 @@ pub fn save(deck: &Deck, path: &Path, overwrite: bool) -> Result<(), ServiceErro
         let _ = fs::remove_file(&temp);
         return Err(ServiceError::new("io/write", format!("could not publish `{}`: {error}", path.display())));
     }
-    Ok(())
+    Ok(bytes.len())
 }
 
 fn temporary_path(path: &Path) -> PathBuf {
