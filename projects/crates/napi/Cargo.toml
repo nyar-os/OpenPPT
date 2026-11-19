@@ -12,4 +12,5 @@ description = "Thin Node-API surface for OpenPPT"
 crate-type = ["cdylib"]
 
 [dependencies]
+open-ppt-deck = { path = "../deck" }
 wae = { workspace = true }

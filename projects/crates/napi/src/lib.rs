@@ -26,9 +26,13 @@ fn version(ctx: CallContext) -> Result<JsValue> {
 }
 
 /// Reports formats, checks, renderers and playback support of the engine.
+///
+/// The matrix is produced by the same binding crate the CLI uses, so the two
+/// entry points cannot report different capabilities.
 #[function]
-fn capabilities(_ctx: CallContext) -> Result<JsValue> {
-    Err(Error::new(NOT_IMPLEMENTED))
+fn capabilities(ctx: CallContext) -> Result<JsValue> {
+    let matrix = open_ppt_deck::capabilities().to_string();
+    ctx.env().string(&matrix)
 }
 
 /// Creates an empty deck.
