@@ -8,10 +8,13 @@ description: Create, revise, review and deliver editable presentation decks with
 ## Status
 
 Scaffold. `@wae/open-ppt` can create, open, inspect, play and save the native
-editable deck, and `open-ppt gui` opens the VMZ editor window. PPTX write, the
-Display renderer and template fill are still unimplemented; do not present those
-routes as executable, and do not fill the gap with local XML, ZIP, typesetting or
-drawing code.
+editable deck. The `play` command also plays a PresentationML package and can
+write one SVG frame per slide into a directory; `open-ppt gui` opens the VMZ
+editor window, which switches to a player when a `.pptx` is opened. PPTX write,
+editing imported PPTX, timed builds and transitions, the Display renderer and
+template fill are still unimplemented; do not present those routes as
+executable, and do not fill the gap with local XML, ZIP, typesetting or drawing
+code.
 
 ## Preflight
 

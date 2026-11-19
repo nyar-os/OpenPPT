@@ -31,6 +31,7 @@ test('capabilities mirror the native matrix instead of a local guess', { skip },
         project: { import: string; playback: string };
         formats: { pptx: { import: string } };
         checks: { contrast: string; overflow: string };
+        renderers: { svg: string };
         playback: { staticSlides: string };
     };
 
@@ -39,7 +40,8 @@ test('capabilities mirror the native matrix instead of a local guess', { skip },
     assert.equal(matrix.playback.staticSlides, 'supported');
     assert.equal(matrix.checks.contrast, 'supported');
     assert.equal(matrix.checks.overflow, 'unsupported');
-    assert.equal(matrix.formats.pptx.import, 'unsupported');
+    assert.equal(matrix.formats.pptx.import, 'partial');
+    assert.equal(matrix.renderers.svg, 'partial');
 });
 
 test('create, save and reopen keep one handle per deck', { skip }, async () => {

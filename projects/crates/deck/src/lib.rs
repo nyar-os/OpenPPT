@@ -8,6 +8,7 @@
 #![deny(missing_docs)]
 
 pub mod edit;
+pub mod pptx;
 
 use std::{
     fmt, fs, io,
@@ -66,21 +67,32 @@ impl From<io::Error> for ServiceError {
 /// What this build can actually do.
 ///
 /// The matrix only claims what is wired: the native project container, editing,
-/// saving, static playback and the implemented rule checks. PPTX exchange,
-/// raster rendering and timed playback stay `unsupported` until they land.
+/// saving, static playback, the implemented rule checks and PresentationML
+/// playback. PPTX import is `partial` because charts, SmartArt, OLE objects,
+/// media and group shapes are refused with stable codes instead of being
+/// painted. Timed builds, transitions and media playback stay `unsupported`.
 pub fn capabilities() -> Value {
     let mut formats = Map::new();
     for format in PRESENTATION_FORMATS {
-        formats.insert(
-            (*format).to_string(),
+        let entry = if *format == "pptx" {
+            json!({
+                "import": "partial",
+                "edit": "unsupported",
+                "export": "unsupported",
+                "playback": "partial",
+                "lossCodes": pptx::LOSS_CODES,
+            })
+        }
+        else {
             json!({
                 "import": "unsupported",
                 "edit": "unsupported",
                 "export": "unsupported",
                 "playback": "unsupported",
                 "lossCodes": [],
-            }),
-        );
+            })
+        };
+        formats.insert((*format).to_string(), entry);
     }
 
     json!({
@@ -95,7 +107,7 @@ pub fn capabilities() -> Value {
             "fonts": "unsupported",
             "out-of-bounds": "supported",
         },
-        "renderers": { "svg": "unsupported", "png": "unsupported", "pdf": "unsupported" },
+        "renderers": { "svg": "partial", "png": "unsupported", "pdf": "unsupported" },
         "exportTargets": { "pptx": "unsupported", "ppsx": "unsupported", "potx": "unsupported", "pdf": "unsupported", "odp": "unsupported" },
         "playback": { "staticSlides": "supported", "builds": "unsupported", "transitions": "unsupported", "media": "unsupported" },
     })

@@ -6,7 +6,7 @@
             "create": "Create a native deck and save it to a project file",
             "open": "Open a project file and print its committed revision and slides",
             "inspect": "Run geometry and rule checks on a project file",
-            "play": "Walk the static show of a project file",
+            "play": "Walk the static show of a project file, or play a PPTX package",
             "gui": "Open the VMZ editor window on the native deck"
         },
         "opt": {
@@ -15,6 +15,7 @@
             "size": "Slide ratio: 16:9, 4:3 or 16:10",
             "slide": "Add a slide with this title (repeatable)",
             "overwrite": "Replace the output file when it already exists",
+            "svg": "Directory to write one SVG frame per slide",
             "checks": "Comma-separated checks: overflow, contrast, alignment, assets, fonts, out-of-bounds"
         }
     }

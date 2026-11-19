@@ -21,7 +21,7 @@ use std::{
     time::Instant,
 };
 
-use open_ppt_deck::{CreateRequest, EditableDeck as Deck, InspectCheck, ServiceError, SizeRequest};
+use open_ppt_deck::{CreateRequest, EditableDeck as Deck, InspectCheck, ServiceError, SizeRequest, pptx::Playback};
 use serde_json::{Value, json};
 use wae::{
     CallContext, Error, JsValue, Result, function, optional_string_prop, register_module,
@@ -64,6 +64,39 @@ fn with_deck_mut<T>(handle: u64, work: impl FnOnce(&mut Deck) -> T) -> Result<T>
 
 fn remove(handle: u64) -> bool {
     lock().decks.remove(&handle).is_some()
+}
+
+/// Live PresentationML playback handles, kept apart from editable decks.
+#[derive(Default)]
+struct PlaybackHandles {
+    next: u64,
+    items: HashMap<u64, Playback>,
+}
+
+fn playbacks() -> &'static Mutex<PlaybackHandles> {
+    static HANDLES: OnceLock<Mutex<PlaybackHandles>> = OnceLock::new();
+    HANDLES.get_or_init(|| Mutex::new(PlaybackHandles::default()))
+}
+
+fn playback_lock() -> std::sync::MutexGuard<'static, PlaybackHandles> {
+    playbacks().lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn insert_playback(playback: Playback) -> u64 {
+    let mut guard = playback_lock();
+    guard.next += 1;
+    let handle = guard.next;
+    guard.items.insert(handle, playback);
+    handle
+}
+
+fn with_playback<T>(handle: u64, work: impl FnOnce(&Playback) -> T) -> Result<T> {
+    let guard = playback_lock();
+    guard.items.get(&handle).map(work).ok_or_else(|| Error::new("object/not-found: the presentation handle is not open"))
+}
+
+fn remove_playback(handle: u64) -> bool {
+    playback_lock().items.remove(&handle).is_some()
 }
 
 fn fail(error: ServiceError) -> Error {
@@ -269,6 +302,40 @@ fn deck_close(ctx: CallContext) -> Result<JsValue> {
     ctx.env().boolean(true)
 }
 
+/// Imports a PresentationML package and renders every visible slide.
+///
+/// The reply is `{ handle, presentation }`, where `presentation` carries the
+/// canvas size, one entry per visible slide and the collected issues.
+#[function]
+fn pptx_open(ctx: CallContext) -> Result<JsValue> {
+    let path = text(&ctx, 0)?;
+    let playback = open_ppt_deck::pptx::open(Path::new(&path)).map_err(fail)?;
+    let summary = playback.summary();
+    let handle = insert_playback(playback);
+    respond(&ctx, &json!({ "handle": handle, "presentation": summary }))
+}
+
+/// Returns one painted slide of an imported presentation.
+#[function]
+fn pptx_slide(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let raw = argument(&ctx, 1)?.as_i64()?;
+    let index =
+        u32::try_from(raw).map_err(|_| Error::new("session/argument-invalid: the slide number must be a positive integer"))?;
+    let slide = with_playback(handle, |playback| playback.slide(index)).and_then(|slide| slide.map_err(fail))?;
+    respond(&ctx, &json!({ "slide": slide }))
+}
+
+/// Closes one playback handle and releases its rendered slides.
+#[function]
+fn pptx_close(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    if !remove_playback(handle) {
+        return Err(Error::new("object/not-found: the presentation handle is not open"));
+    }
+    ctx.env().boolean(true)
+}
+
 // One WebView host per process, owned by the thread that opened it.
 thread_local! {
     static GUI: RefCell<Option<GuiState>> = const { RefCell::new(None) };
@@ -390,6 +457,33 @@ impl IpcHandler for DeckIpcHandler {
                     failure(id, "closeError", "the deck handle is not open".to_string())
                 }
             }
+            "pptx.open" => {
+                let path = value.get("path").and_then(Value::as_str).unwrap_or("").trim().to_string();
+                if path.is_empty() {
+                    return failure(id, "pptxOpenError", "an open request needs a presentation path".to_string());
+                }
+                match call_pptx_open(&path) {
+                    Ok(opened) => reply(id, "pptxOpenResult", opened),
+                    Err(message) => failure(id, "pptxOpenError", message),
+                }
+            }
+            "pptx.slide" => {
+                let handle = handle_of(&value);
+                let index = value.get("index").and_then(Value::as_u64).and_then(|raw| u32::try_from(raw).ok()).unwrap_or(0);
+                match call_pptx_slide(handle, index) {
+                    Ok(slide) => reply(id, "pptxSlideResult", json!({ "slide": slide })),
+                    Err(message) => failure(id, "pptxSlideError", message),
+                }
+            }
+            "pptx.close" => {
+                let handle = handle_of(&value);
+                if remove_playback(handle) {
+                    reply(id, "pptxClosedResult", json!({ "closed": true }))
+                }
+                else {
+                    failure(id, "pptxCloseError", "the presentation handle is not open".to_string())
+                }
+            }
             _ => IpcOutcome::Ignored,
         }
     }
@@ -479,6 +573,21 @@ fn call_save(handle: u64, path: &str, overwrite: bool) -> std::result::Result<Va
 fn call_edit(handle: u64, request: &Value) -> std::result::Result<Value, String> {
     match with_deck_mut(handle, |deck| open_ppt_deck::edit::edit(deck, request)) {
         Ok(Ok(report)) => Ok(report),
+        Ok(Err(error)) => Err(service_failure(error)),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn call_pptx_open(path: &str) -> std::result::Result<Value, String> {
+    let playback = open_ppt_deck::pptx::open(Path::new(path)).map_err(service_failure)?;
+    let presentation = playback.summary();
+    let handle = insert_playback(playback);
+    Ok(json!({ "handle": handle, "presentation": presentation }))
+}
+
+fn call_pptx_slide(handle: u64, index: u32) -> std::result::Result<Value, String> {
+    match with_playback(handle, |playback| playback.slide(index)) {
+        Ok(Ok(slide)) => Ok(slide),
         Ok(Err(error)) => Err(service_failure(error)),
         Err(error) => Err(error.to_string()),
     }
@@ -739,6 +848,9 @@ register_module![
     deck_undo,
     deck_redo,
     deck_close,
+    pptx_open,
+    pptx_slide,
+    pptx_close,
     open_gui,
     pump_events,
     close_gui,

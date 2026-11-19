@@ -7,6 +7,7 @@
  * `@wae/commander`, so the CLI does not grow its own parser.
  */
 
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -14,7 +15,7 @@ import { createCli } from '@wae/commander';
 
 import * as service from './service.js';
 import { runGui } from './gui.js';
-import type { DeckSummary, PlayFrame } from './service.js';
+import type { DeckSummary, PlayFrame, PptxPresentation } from './service.js';
 import type { InspectCheck, InspectReport, OpenPPTCapabilities } from './types.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -79,6 +80,28 @@ function describeReport(report: InspectReport): string {
 function describeFrame(frame: PlayFrame, index: number): string {
     const notes = frame.notes === null ? '' : ` notes=${frame.notes}`;
     return `${index}: slide=${frame.slideId ?? '-'}${notes}`;
+}
+
+/** Extensions the presentation reader plays without a native project. */
+const presentationExtensions = new Set(['pptx', 'pptm', 'ppsx', 'ppsm', 'potx', 'potm']);
+
+function isPresentationPath(file: string): boolean {
+    return presentationExtensions.has(path.extname(file).slice(1).toLowerCase());
+}
+
+function describePresentation(presentation: PptxPresentation): string {
+    const title = presentation.title ?? path.basename(presentation.label);
+    const width = Math.round(presentation.size.widthPx);
+    const height = Math.round(presentation.size.heightPx);
+    const lines = [`presentation ${title} slides=${presentation.slides.length} size=${width}x${height}px`];
+    for (const slide of presentation.slides) {
+        lines.push(`  [${slide.index}] ${Math.round(slide.widthPx)}x${Math.round(slide.heightPx)}px`);
+    }
+    for (const issue of presentation.issues) {
+        const location = issue.slide === null ? '' : ` slide=${issue.slide}`;
+        lines.push(`  ${issue.status} ${issue.code}${location} ${issue.message}`);
+    }
+    return lines.join('\n');
 }
 
 cli.command('capabilities', 'cli.cmd.capabilities').actionCtx(async (_options, _args, ctx) => {
@@ -151,21 +174,47 @@ cli
         }
     });
 
-cli.command('play', 'cli.cmd.play').actionCtx(async (options, _args, ctx) => {
-    const file = input(options);
-    if (file === undefined) {
-        ctx.fail('open-ppt.cli.file-required', { message: 'a project file is required' });
-        return 2;
-    }
-    const opened = service.open(file);
-    try {
-        const report = service.play(opened.handle);
-        ctx.emitResult(report, report.frames.map(describeFrame).join('\n'));
-    } finally {
-        service.close(opened.handle);
-    }
-    return 0;
-});
+cli
+    .command('play', 'cli.cmd.play')
+    .option('--out <dir>', 'cli.opt.svg')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-ppt.cli.file-required', { message: 'a project or presentation file is required' });
+            return 2;
+        }
+        const out = text(options, 'out');
+        if (isPresentationPath(file)) {
+            const opened = service.openPptx(file);
+            try {
+                if (out !== undefined) {
+                    mkdirSync(out, { recursive: true });
+                    for (const slide of opened.presentation.slides) {
+                        const frame = service.pptxSlide(opened.handle, slide.index);
+                        writeFileSync(path.join(out, `slide-${slide.index}.svg`), frame.svg, 'utf8');
+                    }
+                }
+                ctx.emitResult(opened.presentation, describePresentation(opened.presentation));
+            } finally {
+                service.closePptx(opened.handle);
+            }
+            return 0;
+        }
+        if (out !== undefined) {
+            ctx.fail('open-ppt.cli.out-unsupported', {
+                message: '`--out` writes SVG frames only for PresentationML files, not for native projects',
+            });
+            return 2;
+        }
+        const opened = service.open(file);
+        try {
+            const report = service.play(opened.handle);
+            ctx.emitResult(report, report.frames.map(describeFrame).join('\n'));
+        } finally {
+            service.close(opened.handle);
+        }
+        return 0;
+    });
 
 cli.command('gui', 'cli.cmd.gui').actionCtx(async (_options, _args, ctx) => {
     try {

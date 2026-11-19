@@ -94,6 +94,58 @@
             </aside>
         </div>
 
+        <div class="player" v-if="playerMode()">
+            <header class="player-bar">
+                <div class="brand">
+                    <span class="mark">P</span>
+                    <div>
+                        <h1>{{ playerTitle() }}</h1>
+                        <p class="path" :title="projectPath">{{ projectPath }}</p>
+                    </div>
+                </div>
+                <div class="bar-group grow">
+                    <input class="path-input" data-field="savePath" :value="savePath" placeholder="C:\decks\slides.pptx" spellcheck="false" />
+                    <button class="btn" data-action="open">Open</button>
+                </div>
+                <div class="bar-group">
+                    <button class="btn" data-action="player-prev">Prev</button>
+                    <span class="player-count">{{ playerIndex }} / {{ playerSlideCount() }}</span>
+                    <button class="btn" data-action="player-next">Next</button>
+                    <button class="btn btn-primary" data-action="player-present">Present</button>
+                    <button class="btn btn-ghost" data-action="player-exit">Close</button>
+                </div>
+            </header>
+            <div class="player-main">
+                <aside class="player-rail">
+                    <div class="rail-head"><span>Slides</span></div>
+                    <div class="thumbs">
+                        <div
+                            v-for="s in playerSlides()"
+                            :key="s.index"
+                            class="thumb"
+                            :class="s.index === playerIndex ? 'thumb active' : 'thumb'"
+                            :data-player-slide="s.index"
+                        >
+                            <span class="thumb-index">{{ s.index }}</span>
+                            <div class="thumb-card">
+                                <span class="thumb-title">Slide {{ s.index }}</span>
+                                <span class="thumb-meta">{{ round(s.widthPx) }}×{{ round(s.heightPx) }} px</span>
+                            </div>
+                        </div>
+                    </div>
+                </aside>
+                <main class="player-stage-wrap" data-player-wrap>
+                    <img class="player-image" v-if="playerImage()" :src="playerImage()" alt="" />
+                    <p class="hint" v-else>Loading slide…</p>
+                </main>
+            </div>
+            <footer class="statusbar">
+                <span :class="errorText ? 'status error' : 'status'">{{ errorText || status }}</span>
+                <span class="spacer"></span>
+                <span>{{ playerIssueCount() }} issues · {{ playerCanvas() }}</span>
+            </footer>
+        </div>
+
         <footer class="statusbar">
             <span :class="errorText ? 'status error' : 'status'">{{ errorText || status }}</span>
             <span class="spacer"></span>
@@ -102,7 +154,8 @@
 
         <div class="present" v-if="presenting">
             <div class="present-frame" data-present-frame :style="presentFrameStyle()">
-                <div class="stage" data-present-stage :style="presentStageStyle()">
+                <img class="present-image" v-if="playerMode()" :src="playerImage()" alt="" />
+                <div class="stage" v-else data-present-stage :style="presentStageStyle()">
                     <div class="el" v-for="box in elementBoxes()" :key="box.id" :style="box.style"></div>
                     <img class="el-image" v-for="image in imageBlocks()" :key="image.id" :src="image.src" :style="image.style" alt="" />
                     <div class="text-block" v-for="block in textBlocks()" :key="block.key" :style="block.style">{{ block.text }}</div>
@@ -548,6 +601,71 @@
     color: #cfc2b0;
     font-size: 12px;
 }
+
+.present-image {
+    max-width: 92vw;
+    max-height: 80vh;
+    background: #fff;
+    box-shadow: 0 20px 60px #0008;
+}
+
+.player {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    background: var(--op-bg);
+}
+
+.player-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--op-line);
+    background: var(--op-surface);
+}
+
+.player-count {
+    color: var(--op-muted);
+    font-size: 12px;
+}
+
+.player-main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+}
+
+.player-rail {
+    width: 232px;
+    flex: none;
+    padding: 12px;
+    overflow: auto;
+    border-right: 1px solid var(--op-line);
+    background: var(--op-surface-2);
+}
+
+.player-stage-wrap {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    overflow: hidden;
+    background:
+        radial-gradient(circle at 1px 1px, #d8cdbb 1px, transparent 0) 0 0 / 22px 22px,
+        var(--op-bg);
+}
+
+.player-image {
+    max-width: 100%;
+    max-height: 100%;
+    background: #fff;
+    box-shadow: 0 18px 50px #1d1a1622;
+}
 </style>
 
 <script client>
@@ -559,6 +677,12 @@ const FALLBACK_DECK = {
     layouts: [],
     slides: [{ id: "preview-1", index: 0, title: "Preview slide", hidden: false, elements: 3, notes: null }],
 };
+
+const PRESENTATION_EXTENSIONS = ["pptx", "pptm", "ppsx", "ppsm", "potx", "potm"];
+
+function svgUrl(svg) {
+    return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
 
 export default class StudioPage {
     hostReady = false;
@@ -575,6 +699,10 @@ export default class StudioPage {
     slide = null;
     imageCache = {};
     handle = 0;
+    player = null;
+    playerHandle = 0;
+    playerIndex = 1;
+    playerCache = {};
     seq = 0;
     pending = {};
     drag = null;
@@ -639,6 +767,44 @@ export default class StudioPage {
         return this.selectedElement() !== null;
     }
 
+    playerMode() {
+        return this.player !== null;
+    }
+
+    playerTitle() {
+        return this.player && this.player.title ? this.player.title : "Presentation";
+    }
+
+    playerSlides() {
+        return this.player ? this.player.slides : [];
+    }
+
+    playerSlideCount() {
+        return this.player ? this.player.slides.length : 0;
+    }
+
+    playerIssueCount() {
+        return this.player ? this.player.issues.length : 0;
+    }
+
+    playerCanvas() {
+        if (!this.player) {
+            return "";
+        }
+        return `${this.round(this.player.size.widthPx)}×${this.round(this.player.size.heightPx)}px`;
+    }
+
+    playerImage() {
+        const frame = this.playerCache[this.playerIndex];
+        return frame ? svgUrl(frame.svg) : "";
+    }
+
+    isPresentationPath(file) {
+        const dot = file.lastIndexOf(".");
+        const extension = dot < 0 ? "" : file.slice(dot + 1).trim().toLowerCase();
+        return PRESENTATION_EXTENSIONS.indexOf(extension) >= 0;
+    }
+
     fieldValue(name) {
         const element = this.selectedElement();
         if (!element) {
@@ -672,6 +838,9 @@ export default class StudioPage {
     }
 
     presentFrameStyle() {
+        if (this.playerMode()) {
+            return "";
+        }
         return `width:${this.deckWidth() * this.presentScale}pt;height:${this.deckHeight() * this.presentScale}pt;`;
     }
 
@@ -680,6 +849,9 @@ export default class StudioPage {
     }
 
     presentLabel() {
+        if (this.playerMode()) {
+            return `${this.playerIndex} / ${this.player.slides.length}`;
+        }
         const slide = this.currentSlide();
         return slide ? `${slide.index + 1} / ${this.deck.slides.length}` : `${this.deck.slides.length} / ${this.deck.slides.length}`;
     }
@@ -1091,6 +1263,73 @@ export default class StudioPage {
         }
     }
 
+    async openPptx(path) {
+        const response = await this.rpc("pptx.open", { path });
+        await this.releasePlayer();
+        this.playerHandle = response.handle;
+        this.player = response.presentation;
+        this.projectPath = path;
+        this.savePath = path;
+        this.selectedId = "";
+        this.errorText = "";
+        const first = this.player.slides[0];
+        this.playerIndex = first ? first.index : 1;
+        if (first) {
+            await this.loadPlayerSlide(first.index);
+        }
+        this.status = `Playing ${this.player.slides.length} slides`;
+        this.measure();
+    }
+
+    async releasePlayer() {
+        const handle = this.playerHandle;
+        this.playerHandle = 0;
+        this.player = null;
+        this.playerCache = {};
+        this.playerIndex = 1;
+        this.presenting = false;
+        if (handle) {
+            try {
+                await this.rpc("pptx.close", { handle });
+            } catch {
+                // The playback handle is already gone.
+            }
+        }
+    }
+
+    async loadPlayerSlide(index) {
+        if (!this.player) {
+            return;
+        }
+        this.playerIndex = index;
+        if (this.playerCache[index]) {
+            return;
+        }
+        const response = await this.rpc("pptx.slide", { handle: this.playerHandle, index });
+        this.playerCache = Object.assign({}, this.playerCache, { [index]: response.slide });
+        this.status = `Slide ${index} of ${this.player.slides.length}`;
+    }
+
+    async stepPlayer(delta) {
+        if (!this.player || !this.player.slides.length) {
+            return;
+        }
+        const slides = this.player.slides;
+        const index = Math.max(0, slides.findIndex((item) => item.index === this.playerIndex));
+        const next = slides[Math.min(slides.length - 1, Math.max(0, index + delta))];
+        if (next && next.index !== this.playerIndex) {
+            await this.loadPlayerSlide(next.index);
+        }
+    }
+
+    async closePlayer() {
+        await this.releasePlayer();
+        this.presenting = false;
+        this.status = "Presentation closed";
+        this.errorText = "";
+        this.measure();
+    }
+
     async applyEdit(operations) {
         const response = await this.rpc("deck.edit", {
             handle: this.handle,
@@ -1114,6 +1353,15 @@ export default class StudioPage {
         const actionEl = target.closest("[data-action]");
         if (actionEl && actionEl.dataset.action) {
             await this.runAction(actionEl.dataset.action);
+            return;
+        }
+        const playerThumb = target.closest("[data-player-slide]");
+        if (playerThumb && playerThumb.dataset.playerSlide) {
+            try {
+                await this.loadPlayerSlide(Number(playerThumb.dataset.playerSlide));
+            } catch (error) {
+                this.fail(error);
+            }
             return;
         }
         const thumb = target.closest("[data-slide-id]");
@@ -1145,6 +1393,18 @@ export default class StudioPage {
             }
             if (action === "present") {
                 return this.enterPresent();
+            }
+            if (action === "player-prev") {
+                return await this.stepPlayer(-1);
+            }
+            if (action === "player-next") {
+                return await this.stepPlayer(1);
+            }
+            if (action === "player-present") {
+                return this.enterPresent();
+            }
+            if (action === "player-exit") {
+                return await this.closePlayer();
             }
             if (action === "present-prev") {
                 return await this.presentStep(-1);
@@ -1206,8 +1466,14 @@ export default class StudioPage {
     async open() {
         const path = this.savePath.trim();
         if (!path) {
-            this.errorText = "Type a project path before opening.";
+            this.errorText = "Type a project or presentation path before opening.";
             return;
+        }
+        if (this.isPresentationPath(path)) {
+            return await this.openPptx(path);
+        }
+        if (this.playerMode()) {
+            await this.releasePlayer();
         }
         const response = await this.rpc("deck.open", { path });
         if (this.handle) {
@@ -1623,6 +1889,25 @@ export default class StudioPage {
     onKeyDown(event) {
         const target = event.target;
         const typing = target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA");
+        if (this.playerMode()) {
+            if (typing) {
+                return;
+            }
+            if (event.key === "ArrowRight" || event.key === " ") {
+                event.preventDefault();
+                void this.stepPlayer(1);
+            } else if (event.key === "ArrowLeft") {
+                event.preventDefault();
+                void this.stepPlayer(-1);
+            } else if (event.key === "Escape") {
+                if (this.presenting) {
+                    this.exitPresent();
+                } else {
+                    void this.closePlayer();
+                }
+            }
+            return;
+        }
         if (this.presenting) {
             if (event.key === "ArrowRight" || event.key === " ") {
                 event.preventDefault();
@@ -1650,7 +1935,11 @@ export default class StudioPage {
     }
 
     enterPresent() {
-        if (!this.deck.slides.length) {
+        if (this.playerMode()) {
+            if (!this.player.slides.length) {
+                return;
+            }
+        } else if (!this.deck.slides.length) {
             return;
         }
         this.presenting = true;
@@ -1665,6 +1954,9 @@ export default class StudioPage {
     }
 
     async presentStep(delta) {
+        if (this.playerMode()) {
+            return this.stepPlayer(delta);
+        }
         const slides = this.deck.slides;
         const index = Math.max(0, slides.findIndex((item) => item.id === this.currentSlideId));
         const next = Math.min(slides.length - 1, Math.max(0, index + delta));

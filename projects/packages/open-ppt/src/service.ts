@@ -228,3 +228,57 @@ export function redo(handle: number): HistoryReport {
 export function close(handle: number): void {
     binding('deck.close').deck_close(handle);
 }
+
+/** One painted slide of an imported presentation. */
+export interface PptxSlideFrame {
+    readonly index: number;
+    readonly widthPx: number;
+    readonly heightPx: number;
+    /** Standalone SVG document painted at 96 dpi. */
+    readonly svg: string;
+}
+
+/** One import or view issue of an imported presentation. */
+export interface PptxIssue {
+    readonly code: string;
+    readonly status: 'partial' | 'unsupported';
+    readonly message: string;
+    readonly slide: number | null;
+    readonly shape: number | null;
+}
+
+/** Show summary of one imported presentation. */
+export interface PptxPresentation {
+    readonly label: string;
+    readonly title: string | null;
+    readonly size: {
+        readonly widthPx: number;
+        readonly heightPx: number;
+        readonly widthPt: number;
+        readonly heightPt: number;
+    };
+    /** Visible slides in show order; hidden slides are already skipped. */
+    readonly slides: ReadonlyArray<{ readonly index: number; readonly widthPx: number; readonly heightPx: number }>;
+    readonly issues: ReadonlyArray<PptxIssue>;
+}
+
+/** Result of opening a PresentationML package for playback. */
+export interface PptxHandle {
+    readonly handle: number;
+    readonly presentation: PptxPresentation;
+}
+
+/** Imports a PresentationML package and paints every visible slide. */
+export function openPptx(path: string): PptxHandle {
+    return decode<PptxHandle>(() => binding('pptx.open').pptx_open(path));
+}
+
+/** Reads one painted slide of an imported presentation by its one-based number. */
+export function pptxSlide(handle: number, index: number): PptxSlideFrame {
+    return decode<{ readonly slide: PptxSlideFrame }>(() => binding('pptx.slide').pptx_slide(handle, index)).slide;
+}
+
+/** Releases one playback handle. */
+export function closePptx(handle: number): void {
+    binding('pptx.close').pptx_close(handle);
+}

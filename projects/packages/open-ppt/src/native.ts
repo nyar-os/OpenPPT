@@ -27,6 +27,9 @@ export interface NativeBinding {
     deck_undo(handle: number): string;
     deck_redo(handle: number): string;
     deck_close(handle: number): boolean;
+    pptx_open(path: string): string;
+    pptx_slide(handle: number, index: number): string;
+    pptx_close(handle: number): boolean;
     openGui(options?: { title?: string; contentDir?: string; width?: number; height?: number }): string;
     pumpEvents(): string;
     closeGui(): string;

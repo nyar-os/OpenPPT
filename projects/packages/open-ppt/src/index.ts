@@ -10,6 +10,8 @@
 
 export { Deck } from './deck.js';
 export { OpenPPT } from './open-ppt.js';
+export { closePptx, openPptx, pptxSlide } from './service.js';
+export type { PptxHandle, PptxIssue, PptxPresentation, PptxSlideFrame } from './service.js';
 export { GuiError, closeGui, defaultGuiContentDir, isGuiOpen, openGui, pumpEvents, runGui } from './gui.js';
 export type { GuiCloseResult, GuiOpenResult, GuiStatus, OpenGuiOptions } from './gui.js';
 export { NotImplementedError, OpenPPTError, errorCodes, isOpenPPTError } from './errors.js';
