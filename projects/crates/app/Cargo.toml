@@ -13,3 +13,8 @@ name = "open-ppt"
 path = "src/main.rs"
 
 [dependencies]
+open-ppt-deck = { path = "../deck" }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
