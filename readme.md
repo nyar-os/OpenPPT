@@ -25,11 +25,13 @@ graph LR
 - **No second deck model** — playback, editing and agent authoring consume the same project revision. There is no "playback deck" vs. "authoring deck" split.
 - **No algorithms in the skills package** — it ships skill documents only.
 
-## 🚀 Usage (placeholder)
+## 🚀 Usage (declared surface)
 
-Not implemented yet — the scaffold is ready. Commands follow the deck-centric model:
+The authoring surface is declared; no capability is wired yet. Every call below
+rejects with `capability/not-implemented`, so examples never pretend to succeed:
 
 ```bash
+open-ppt capabilities
 open-ppt create --title "Research review" --size 16:9
 open-ppt open deck.pptx
 open-ppt inspect deck.pptx
@@ -52,6 +54,9 @@ await ppt.dispose();
 ```
 OpenPPT/
 ├── projects/
+│   ├── crates/
+│   │   ├── app/                   # Native host / CLI entry
+│   │   └── napi/                  # Node-API binding (thin value mapping)
 │   ├── packages/
 │   │   ├── open-ppt/              # CLI + SDK entry point
 │   │   ├── open-ppt-skills/       # Agent skill documents

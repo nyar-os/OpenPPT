@@ -21,6 +21,6 @@
     "repository": {
         "type": "git",
         "url": "git+https://github.com/nyar-os/OpenPPT.git",
-        "directory": "packages/open-ppt-skills"
+        "directory": "projects/packages/open-ppt-skills"
     }
 }
