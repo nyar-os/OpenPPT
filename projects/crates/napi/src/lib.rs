@@ -48,6 +48,11 @@ fn with_deck<T>(handle: u64, work: impl FnOnce(&Deck) -> T) -> Result<T> {
     guard.decks.get(&handle).map(work).ok_or_else(|| Error::new("deck/not-found: the deck handle is not open"))
 }
 
+fn with_deck_mut<T>(handle: u64, work: impl FnOnce(&mut Deck) -> T) -> Result<T> {
+    let mut guard = lock();
+    guard.decks.get_mut(&handle).map(work).ok_or_else(|| Error::new("deck/not-found: the deck handle is not open"))
+}
+
 fn remove(handle: u64) -> bool {
     lock().decks.remove(&handle).is_some()
 }
@@ -192,6 +197,50 @@ fn deck_play(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &json!({ "frames": frames }))
 }
 
+/// Applies one atomic JSON edit script and returns the committed summary.
+#[function]
+fn deck_edit(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let raw = text(&ctx, 1)?;
+    let request: Value =
+        serde_json::from_str(&raw).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))?;
+    let report = with_deck_mut(handle, |deck| open_ppt_deck::edit::edit(deck, &request))?.map_err(fail)?;
+    respond(&ctx, &report)
+}
+
+/// Returns one slide with its elements in authoring units.
+#[function]
+fn deck_slide(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let slide = text(&ctx, 1)?;
+    let detail = with_deck(handle, |deck| open_ppt_deck::edit::slide_detail(deck, &slide))?.map_err(fail)?;
+    respond(&ctx, &detail)
+}
+
+/// Lists embedded assets with sizes and hashes.
+#[function]
+fn deck_assets(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let report = with_deck(handle, open_ppt_deck::edit::assets)?;
+    respond(&ctx, &report)
+}
+
+/// Restores the previous committed document.
+#[function]
+fn deck_undo(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let report = with_deck_mut(handle, open_ppt_deck::edit::undo)?;
+    respond(&ctx, &report)
+}
+
+/// Reapplies the last undone document.
+#[function]
+fn deck_redo(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let report = with_deck_mut(handle, open_ppt_deck::edit::redo)?;
+    respond(&ctx, &report)
+}
+
 /// Closes one deck handle and releases its resources.
 #[function]
 fn deck_close(ctx: CallContext) -> Result<JsValue> {
@@ -202,4 +251,19 @@ fn deck_close(ctx: CallContext) -> Result<JsValue> {
     ctx.env().boolean(true)
 }
 
-register_module![version, capabilities, deck_create, deck_open, deck_summary, deck_save, deck_inspect, deck_play, deck_close];
+register_module![
+    version,
+    capabilities,
+    deck_create,
+    deck_open,
+    deck_summary,
+    deck_save,
+    deck_inspect,
+    deck_play,
+    deck_edit,
+    deck_slide,
+    deck_assets,
+    deck_undo,
+    deck_redo,
+    deck_close
+];

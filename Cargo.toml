@@ -21,6 +21,7 @@ wae = { git = "https://github.com/doki-land/wae-framework.git", rev = "f92f818fd
 # The path keeps local development on the same working copy. Replacing it with a
 # 40-character git rev pin is the release gate once that revision is published.
 document-presentation = { path = "../rust-boost/projects/document/document.presentation" }
+base64 = "0.22"
 serde_json = "1"
 
 [profile.release]

@@ -7,6 +7,8 @@
 
 #![deny(missing_docs)]
 
+pub mod edit;
+
 use std::{
     fmt, fs, io,
     path::{Path, PathBuf},

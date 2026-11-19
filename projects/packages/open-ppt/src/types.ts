@@ -448,10 +448,33 @@ export interface AssetsApi {
     remove(assetId: AssetId): Promise<void>;
 }
 
-/** Handle passed to `deck.transaction()`. Extended as editing lands. */
+/**
+ * Handle passed to `deck.transaction()`.
+ *
+ * Operations are buffered and committed as one native transaction against
+ * `baseRevision`; a thrown error leaves no half page. Identities returned by
+ * creation methods are provisional tokens valid only inside this transaction.
+ */
 export interface DeckTransaction {
     /** Revision the transaction started from. */
     readonly baseRevision: number;
+    addSlide(options?: SlideAddOptions): SlideId;
+    duplicateSlide(slideId: SlideId, options?: { readonly index?: number }): SlideId;
+    removeSlide(slideId: SlideId): void;
+    reorderSlides(slideIds: readonly SlideId[]): void;
+    setSlideTitle(slideId: SlideId, text: TextInput): void;
+    setSlideNotes(slideId: SlideId, text: TextInput | null): void;
+    setSlideHidden(slideId: SlideId, hidden: boolean): void;
+    addText(slideId: SlideId, input: TextElementInput): ElementId;
+    addImage(slideId: SlideId, input: ImageElementInput): ElementId;
+    addShape(slideId: SlideId, input: ShapeElementInput): ElementId;
+    addTable(slideId: SlideId, input: TableElementInput): ElementId;
+    addChart(slideId: SlideId, input: ChartElementInput): ElementId;
+    addFormula(slideId: SlideId, input: FormulaElementInput): ElementId;
+    addMedia(slideId: SlideId, input: MediaElementInput): ElementId;
+    updateElement(slideId: SlideId, elementId: ElementId, patch: ElementPatch): void;
+    removeElement(slideId: SlideId, elementId: ElementId): void;
+    addAsset(input: AssetInput): AssetId;
 }
 
 /** Options of `deck.inspect()`. */

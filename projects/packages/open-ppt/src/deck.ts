@@ -3,34 +3,61 @@
  *
  * One instance wraps one native handle. Decks come from `OpenPPT.create()` or
  * `OpenPPT.open()`; the constructor is private so no second deck model can be
- * built here. Methods that still lack a native export reject with
- * `capability/not-implemented` instead of returning fabricated data.
+ * built here. Every mutation is one atomic native transaction, so a rejected
+ * call leaves no half page behind.
  */
+
+import { readFileSync } from 'node:fs';
+import { basename, extname } from 'node:path';
 
 import { NotImplementedError, OpenPPTError } from './errors.js';
 import type { DeckIntent, PresentationFormat } from './formats.js';
 import * as service from './service.js';
 import type { DeckHandle, DeckSummary } from './service.js';
 import type {
+    AssetId,
+    AssetInfo,
+    AssetInput,
     AssetsApi,
+    BytesSource,
+    ChartElementInput,
     ContactSheet,
     ContactSheetOptions,
     DeckId,
     DeckTransaction,
+    Element,
+    ElementId,
+    ElementKind,
+    ElementPatch,
+    ElementsApi,
     ExportOptions,
     ExportReport,
+    FormulaElementInput,
+    ImageElementInput,
     InspectOptions,
     InspectReport,
+    LayoutId,
     LayoutsApi,
+    LockFlags,
     MastersApi,
+    MediaElementInput,
     PlaybackApi,
     RenderOptions,
     RenderReport,
     SaveOptions,
     SaveReport,
+    ShapeElementInput,
+    Slide,
+    SlideAddOptions,
+    SlideId,
     SlidesApi,
     SlideSummary,
+    TableElementInput,
+    TextElementInput,
+    TextInput,
+    TextTarget,
     ThemesApi,
+    Transform,
 } from './types.js';
 
 /** Session that owns deck handles. Implemented by `OpenPPT`. */
@@ -63,22 +90,28 @@ export class Deck {
     private constructor(state: DeckState) {
         this.state = state;
         this.slides = {
-            add: () => unsupported('slides.add'),
-            get: () => unsupported('slides.get'),
+            add: async (options?: SlideAddOptions) => {
+                const report = this.apply([{ op: 'slide.add', layout: options?.layout, index: options?.index }]);
+                const id = created(report.results, 'slide.add');
+                return new SlideView(this, id);
+            },
+            get: async (slideId: SlideId) => new SlideView(this, slideId),
             list: async () => {
-                this.assertOpen('slides.list');
+                this.refresh();
                 return this.state.summary.slides.map(
-                    (slide): SlideSummary => ({
-                        id: slide.id,
-                        index: slide.index,
-                        title: slide.title,
-                        hidden: slide.hidden,
-                    }),
+                    (slide): SlideSummary => ({ id: slide.id, index: slide.index, title: slide.title, hidden: slide.hidden }),
                 );
             },
-            reorder: () => unsupported('slides.reorder'),
-            duplicate: () => unsupported('slides.duplicate'),
-            remove: () => unsupported('slides.remove'),
+            reorder: async (slideIds: readonly SlideId[]) => {
+                this.apply([{ op: 'slide.reorder', slideIds }]);
+            },
+            duplicate: async (slideId: SlideId, options?: { readonly index?: number }) => {
+                const report = this.apply([{ op: 'slide.duplicate', slideId, index: options?.index }]);
+                return new SlideView(this, created(report.results, 'slide.duplicate'));
+            },
+            remove: async (slideId: SlideId) => {
+                this.apply([{ op: 'slide.remove', slideId }]);
+            },
         };
         this.masters = { list: () => unsupported('masters.list') };
         this.layouts = { list: () => unsupported('layouts.list') };
@@ -89,9 +122,38 @@ export class Deck {
             import: () => unsupported('themes.import'),
         };
         this.assets = {
-            list: () => unsupported('assets.list'),
-            add: () => unsupported('assets.add'),
-            remove: () => unsupported('assets.remove'),
+            list: async () =>
+                service.assets(this.handle('assets.list')).map(
+                    (asset): AssetInfo => ({
+                        id: asset.id,
+                        name: asset.name,
+                        mediaType: asset.mediaType,
+                        bytes: asset.bytes,
+                        sha256: asset.sha256,
+                        ...(asset.license === null ? {} : { license: asset.license }),
+                    }),
+                ),
+            add: async (input: AssetInput) => {
+                const report = this.apply([assetAddOperation(input)]);
+                const id = created(report.results, 'assets.add');
+                const asset = service.assets(this.state.handle).find((candidate) => candidate.id === id);
+                if (asset === undefined) {
+                    throw new OpenPPTError('object/not-found', `asset \`${id}\` is missing after it was added`);
+                }
+                return {
+                    id: asset.id,
+                    name: asset.name,
+                    mediaType: asset.mediaType,
+                    bytes: asset.bytes,
+                    sha256: asset.sha256,
+                    ...(asset.license === null ? {} : { license: asset.license }),
+                };
+            },
+            remove: async () => {
+                throw new OpenPPTError('object/unsupported', 'the engine cannot remove an embedded asset yet', {
+                    details: { feature: 'assets.remove' },
+                });
+            },
         };
         this.playback = { create: () => unsupported('playback.create') };
     }
@@ -137,9 +199,28 @@ export class Deck {
     }
 
     /** Runs `work` atomically against one revision; a failed transaction leaves no half page. */
-    async transaction<T>(_work: (transaction: DeckTransaction) => Promise<T> | T): Promise<T> {
+    async transaction<T>(work: (transaction: DeckTransaction) => Promise<T> | T): Promise<T> {
         this.assertOpen('deck.transaction');
-        throw new NotImplementedError('deck.transaction');
+        const transaction = new BufferedTransaction(this);
+        const result = await work(transaction);
+        transaction.commit();
+        return result;
+    }
+
+    /** Restores the previous committed document; `false` at the beginning of history. */
+    async undo(): Promise<boolean> {
+        this.assertOpen('deck.undo');
+        const report = service.undo(this.state.handle);
+        this.state.summary = report.deck;
+        return report.changed;
+    }
+
+    /** Reapplies the last undone document; `false` when redo is empty. */
+    async redo(): Promise<boolean> {
+        this.assertOpen('deck.redo');
+        const report = service.redo(this.state.handle);
+        this.state.summary = report.deck;
+        return report.changed;
     }
 
     /** Applies rule checks (`overflow`, `contrast`, `alignment`, `assets`, `fonts`, `out-of-bounds`). */
@@ -208,8 +289,551 @@ export class Deck {
     markDisposed(): void {
         this.state.closed = true;
     }
+
+    /** @internal Reads one slide with its elements. */
+    slideDetail(slideId: SlideId): service.SlideDetail {
+        return service.slide(this.handle('slides.get'), slideId);
+    }
+
+    /** @internal Commits one atomic script and refreshes the summary. */
+    apply(operations: ReadonlyArray<service.EditOperation>, expectedRevision?: number): service.EditReport {
+        this.assertOpen('deck.edit');
+        const report = service.edit(this.state.handle, { expectedRevision, operations });
+        this.state.summary = report.deck;
+        return report;
+    }
+
+    /** @internal Sets the hidden flag synchronously; used by the writable slide property. */
+    setSlideHidden(slideId: SlideId, hidden: boolean): void {
+        this.apply([{ op: 'slide.setHidden', slideId, hidden }]);
+    }
+
+    /** @internal Replaces the title text; the native model keeps titles plain. */
+    setSlideTitle(slideId: SlideId, text: TextInput, expectedRevision?: number): void {
+        this.apply([{ op: 'slide.setTitle', slideId, text: plainText(text, 'slide.title') }], expectedRevision);
+    }
+
+    /** @internal Replaces the notes text; empty text clears the notes. */
+    setSlideNotes(slideId: SlideId, text: TextInput, expectedRevision?: number): void {
+        const plain = plainText(text, 'slide.notes');
+        this.apply([{ op: 'slide.setNotes', slideId, text: plain.length === 0 ? null : plain }], expectedRevision);
+    }
+
+    /** @internal Handle for services that still take a raw handle. */
+    handle(feature: string): number {
+        this.assertOpen(feature);
+        return this.state.handle;
+    }
+}
+
+class SlideView implements Slide {
+    constructor(
+        private readonly deck: Deck,
+        private readonly slideId: SlideId,
+    ) {}
+
+    get id(): SlideId {
+        return this.slideId;
+    }
+
+    get index(): number {
+        return this.detail().index;
+    }
+
+    get title(): TextTarget {
+        return this.target('title');
+    }
+
+    get notes(): TextTarget {
+        return this.target('notes');
+    }
+
+    get elements(): ElementsApi {
+        return new ElementsView(this.deck, this.slideId);
+    }
+
+    get hidden(): boolean {
+        return this.detail().hidden;
+    }
+
+    set hidden(value: boolean) {
+        this.deck.setSlideHidden(this.slideId, value);
+    }
+
+    get layout(): LayoutId | null {
+        return this.detail().layout;
+    }
+
+    set layout(_value: LayoutId | null) {
+        throw new OpenPPTError('object/unsupported', 'changing a slide layout is not editable yet', {
+            details: { feature: 'slide.layout' },
+        });
+    }
+
+    private detail(): service.SlideDetail {
+        return this.deck.slideDetail(this.slideId);
+    }
+
+    private target(kind: 'title' | 'notes'): TextTarget {
+        return {
+            get: async () => (kind === 'title' ? this.detail().title : (this.detail().notes ?? '')),
+            set: async (text: TextInput, options) => {
+                if (options?.fit !== undefined && options.fit !== 'wrap') {
+                    throw new OpenPPTError('object/unsupported', `\`fit: '${options.fit}'\` needs the autofit engine`, {
+                        details: { feature: 'text.fit' },
+                    });
+                }
+                if (kind === 'title') {
+                    this.deck.setSlideTitle(this.slideId, text, options?.expectedRevision);
+                } else {
+                    this.deck.setSlideNotes(this.slideId, text, options?.expectedRevision);
+                }
+            },
+        };
+    }
+}
+
+class ElementsView {
+    constructor(
+        private readonly deck: Deck,
+        private readonly slideId: SlideId,
+    ) {}
+
+    async addText(input: TextElementInput): Promise<Element> {
+        return this.commit(textOperation(this.slideId, input));
+    }
+
+    async addImage(input: ImageElementInput): Promise<Element> {
+        return this.commit({
+            op: 'image.add',
+            slideId: this.slideId,
+            alt: input.alt,
+            transform: input.transform,
+            ...payloadFor(input.source, 'image'),
+        });
+    }
+
+    async addShape(input: ShapeElementInput): Promise<Element> {
+        return this.commit({
+            op: 'shape.add',
+            slideId: this.slideId,
+            geometry: input.geometry,
+            transform: input.transform,
+            fill: input.fill,
+            line: input.line,
+            alt: input.alt,
+        });
+    }
+
+    async addTable(input: TableElementInput): Promise<Element> {
+        return this.commit(tableOperation(this.slideId, input, this.deck.size));
+    }
+
+    async addChart(input: ChartElementInput): Promise<Element> {
+        return this.commit({
+            op: 'chart.add',
+            slideId: this.slideId,
+            chartType: input.type,
+            data: input.data,
+            transform: input.transform,
+            alt: input.alt,
+        });
+    }
+
+    async addFormula(input: FormulaElementInput): Promise<Element> {
+        return this.commit({
+            op: 'formula.add',
+            slideId: this.slideId,
+            expression: input.expression,
+            transform: input.transform,
+            alt: input.alt,
+        });
+    }
+
+    async addMedia(input: MediaElementInput): Promise<Element> {
+        return this.commit({
+            op: 'media.add',
+            slideId: this.slideId,
+            kind: input.kind,
+            alt: input.alt,
+            transform: input.transform,
+            ...payloadFor(input.source, input.kind),
+        });
+    }
+
+    async get(elementId: ElementId): Promise<Element> {
+        const detail = this.deck.slideDetail(this.slideId);
+        const element = detail.elements.find((candidate) => candidate.id === elementId);
+        if (element === undefined) {
+            throw new OpenPPTError('object/not-found', `element \`${elementId}\` is not on slide \`${this.slideId}\``, {
+                details: { feature: 'elements.get', slideId: this.slideId, elementId },
+            });
+        }
+        return elementView(element);
+    }
+
+    async update(elementId: ElementId, patch: ElementPatch): Promise<Element> {
+        const operations = patchOperations(this.slideId, elementId, patch);
+        if (operations.length > 0) {
+            this.deck.apply(operations, patch.expectedRevision);
+        }
+        return this.get(elementId);
+    }
+
+    async remove(elementId: ElementId): Promise<void> {
+        this.deck.apply([{ op: 'element.remove', slideId: this.slideId, elementId }]);
+    }
+
+    async group(): Promise<Element> {
+        throw new OpenPPTError('object/unsupported', 'groups are not editable yet', { details: { feature: 'elements.group' } });
+    }
+
+    async align(): Promise<void> {
+        throw new OpenPPTError('object/unsupported', 'alignment commands need the layout engine', {
+            details: { feature: 'elements.align' },
+        });
+    }
+
+    async distribute(): Promise<void> {
+        throw new OpenPPTError('object/unsupported', 'distribution commands need the layout engine', {
+            details: { feature: 'elements.distribute' },
+        });
+    }
+
+    async zOrder(): Promise<void> {
+        throw new OpenPPTError('object/unsupported', 'stacking commands are not editable yet', {
+            details: { feature: 'elements.zOrder' },
+        });
+    }
+
+    async lock(elementId: ElementId, flags: LockFlags): Promise<void> {
+        this.deck.apply([{ op: 'element.lock', slideId: this.slideId, elementId, flags }]);
+    }
+
+    private commit(operation: service.EditOperation): Element {
+        const report = this.deck.apply([operation]);
+        return elementViewFrom(this.deck, this.slideId, created(report.results, String(operation.op)));
+    }
+}
+
+class BufferedTransaction implements DeckTransaction {
+    readonly baseRevision: number;
+    private readonly operations: service.EditOperation[] = [];
+    private counter = 0;
+
+    constructor(private readonly deck: Deck) {
+        this.baseRevision = deck.revision;
+    }
+
+    addSlide(options?: SlideAddOptions): SlideId {
+        const token = this.token();
+        this.operations.push({ op: 'slide.add', layout: options?.layout, index: options?.index, as: token });
+        return token;
+    }
+
+    duplicateSlide(slideId: SlideId, options?: { readonly index?: number }): SlideId {
+        const token = this.token();
+        this.operations.push({ op: 'slide.duplicate', slideId, index: options?.index, as: token });
+        return token;
+    }
+
+    removeSlide(slideId: SlideId): void {
+        this.operations.push({ op: 'slide.remove', slideId });
+    }
+
+    reorderSlides(slideIds: readonly SlideId[]): void {
+        this.operations.push({ op: 'slide.reorder', slideIds });
+    }
+
+    setSlideTitle(slideId: SlideId, text: TextInput): void {
+        this.operations.push({ op: 'slide.setTitle', slideId, text: plainText(text, 'slide.title') });
+    }
+
+    setSlideNotes(slideId: SlideId, text: TextInput | null): void {
+        if (text === null) {
+            this.operations.push({ op: 'slide.setNotes', slideId, text: null });
+            return;
+        }
+        const plain = plainText(text, 'slide.notes');
+        this.operations.push({ op: 'slide.setNotes', slideId, text: plain.length === 0 ? null : plain });
+    }
+
+    setSlideHidden(slideId: SlideId, hidden: boolean): void {
+        this.operations.push({ op: 'slide.setHidden', slideId, hidden });
+    }
+
+    addText(slideId: SlideId, input: TextElementInput): ElementId {
+        return this.pushCreated(textOperation(slideId, input));
+    }
+
+    addImage(slideId: SlideId, input: ImageElementInput): ElementId {
+        return this.pushCreated({
+            op: 'image.add',
+            slideId,
+            alt: input.alt,
+            transform: input.transform,
+            ...payloadFor(input.source, 'image'),
+        });
+    }
+
+    addShape(slideId: SlideId, input: ShapeElementInput): ElementId {
+        return this.pushCreated({
+            op: 'shape.add',
+            slideId,
+            geometry: input.geometry,
+            transform: input.transform,
+            fill: input.fill,
+            line: input.line,
+            alt: input.alt,
+        });
+    }
+
+    addTable(slideId: SlideId, input: TableElementInput): ElementId {
+        return this.pushCreated(tableOperation(slideId, input, this.deck.size));
+    }
+
+    addChart(slideId: SlideId, input: ChartElementInput): ElementId {
+        return this.pushCreated({
+            op: 'chart.add',
+            slideId,
+            chartType: input.type,
+            data: input.data,
+            transform: input.transform,
+            alt: input.alt,
+        });
+    }
+
+    addFormula(slideId: SlideId, input: FormulaElementInput): ElementId {
+        return this.pushCreated({
+            op: 'formula.add',
+            slideId,
+            expression: input.expression,
+            transform: input.transform,
+            alt: input.alt,
+        });
+    }
+
+    addMedia(slideId: SlideId, input: MediaElementInput): ElementId {
+        return this.pushCreated({
+            op: 'media.add',
+            slideId,
+            kind: input.kind,
+            alt: input.alt,
+            transform: input.transform,
+            ...payloadFor(input.source, input.kind),
+        });
+    }
+
+    updateElement(slideId: SlideId, elementId: ElementId, patch: ElementPatch): void {
+        this.operations.push(...patchOperations(slideId, elementId, patch));
+    }
+
+    removeElement(slideId: SlideId, elementId: ElementId): void {
+        this.operations.push({ op: 'element.remove', slideId, elementId });
+    }
+
+    addAsset(input: AssetInput): AssetId {
+        return this.pushCreated(assetAddOperation(input));
+    }
+
+    /** @internal */
+    commit(): void {
+        this.deck.apply(this.operations, this.baseRevision);
+    }
+
+    private pushCreated(operation: service.EditOperation): string {
+        const token = this.token();
+        this.operations.push({ ...operation, as: token });
+        return token;
+    }
+
+    private token(): string {
+        this.counter += 1;
+        return `$tx:${this.counter}`;
+    }
 }
 
 function unsupported(feature: string): Promise<never> {
     return Promise.reject(new NotImplementedError(feature));
+}
+
+function created(results: ReadonlyArray<string | null>, feature: string): string {
+    const id = results[0];
+    if (id === undefined || id === null) {
+        throw new OpenPPTError('object/not-found', `the engine did not return an identity for \`${feature}\``);
+    }
+    return id;
+}
+
+function elementViewFrom(deck: Deck, slideId: SlideId, elementId: ElementId): Element {
+    const detail = deck.slideDetail(slideId);
+    const element = detail.elements.find((candidate) => candidate.id === elementId);
+    if (element === undefined) {
+        throw new OpenPPTError('object/not-found', `element \`${elementId}\` is missing after the edit`, {
+            details: { feature: 'elements.get', slideId, elementId },
+        });
+    }
+    return elementView(element);
+}
+
+function elementView(element: service.ElementDetail): Element {
+    const transform: Transform = {
+        xPt: element.transform.xPt,
+        yPt: element.transform.yPt,
+        widthPt: element.transform.widthPt,
+        heightPt: element.transform.heightPt,
+        ...(element.transform.rotationDeg === null ? {} : { rotationDeg: element.transform.rotationDeg }),
+    };
+    return {
+        id: element.id,
+        kind: element.kind as ElementKind,
+        transform,
+        alt: element.alt,
+        locked: element.locked,
+    };
+}
+
+function plainText(text: TextInput, feature: string): string {
+    if (typeof text === 'string') {
+        return text;
+    }
+    throw new OpenPPTError('object/unsupported', 'the native model stores titles and notes as plain text', {
+        details: { feature: `${feature}.rich` },
+    });
+}
+
+function textJson(text: TextInput): unknown {
+    if (typeof text === 'string') {
+        return {
+            paragraphs: text.split('\n').map((line) => ({ runs: [{ text: line }], level: 0 })),
+        };
+    }
+    return {
+        paragraphs: text.paragraphs.map((paragraph) => ({
+            level: paragraph.level ?? 0,
+            ...(paragraph.align === undefined ? {} : { align: paragraph.align }),
+            runs: paragraph.runs === undefined ? [{ text: paragraph.text ?? '' }] : paragraph.runs.map((run) => ({ ...run })),
+        })),
+    };
+}
+
+function textOperation(slideId: SlideId, input: TextElementInput): service.EditOperation {
+    return {
+        op: 'text.add',
+        slideId,
+        text: textJson(input.text),
+        transform: input.transform,
+        alt: input.alt,
+        placeholder: input.placeholder,
+    };
+}
+
+function tableOperation(
+    slideId: SlideId,
+    input: TableElementInput,
+    deckSize: { readonly widthPt: number; readonly heightPt: number },
+): service.EditOperation {
+    const columns = input.rows[0]?.length ?? 0;
+    if (columns === 0 || input.rows.length === 0) {
+        throw new OpenPPTError('session/argument-invalid', 'tables need at least one column and one row');
+    }
+    // Without a box, tables use the body safe area and share it evenly.
+    const transform: Transform = input.transform ?? {
+        xPt: deckSize.widthPt * 0.1,
+        yPt: deckSize.heightPt * 0.2,
+        widthPt: deckSize.widthPt * 0.8,
+        heightPt: deckSize.heightPt * 0.6,
+    };
+    const columnWidth = transform.widthPt / columns;
+    const rowHeight = transform.heightPt / input.rows.length;
+    return {
+        op: 'table.add',
+        slideId,
+        transform,
+        alt: input.alt,
+        columnWidthsPt: Array.from({ length: columns }, () => columnWidth),
+        rowHeightsPt: Array.from({ length: input.rows.length }, () => rowHeight),
+        rows: input.rows.map((row) => row.map((cell) => ({ text: textJson(cell.text ?? ''), fill: cell.fill }))),
+    };
+}
+
+function patchOperations(slideId: SlideId, elementId: ElementId, patch: ElementPatch): service.EditOperation[] {
+    const operations: service.EditOperation[] = [];
+    if (patch.transform !== undefined) {
+        operations.push({ op: 'element.updateTransform', slideId, elementId, transform: patch.transform });
+    }
+    if (patch.alt !== undefined) {
+        operations.push({ op: 'element.updateAlt', slideId, elementId, alt: patch.alt });
+    }
+    if (patch.text !== undefined) {
+        operations.push({ op: 'element.setText', slideId, elementId, text: textJson(patch.text) });
+    }
+    if (patch.data !== undefined) {
+        operations.push({ op: 'element.setChartData', slideId, elementId, data: patch.data });
+    }
+    if (patch.fill !== undefined) {
+        throw new OpenPPTError('object/unsupported', 'updating a fill in place is not editable yet', {
+            details: { feature: 'elements.update.fill' },
+        });
+    }
+    return operations;
+}
+
+function assetAddOperation(input: AssetInput): service.EditOperation {
+    const payload = payloadFor(input, 'asset');
+    if (!('asset' in payload)) {
+        throw new OpenPPTError('session/argument-invalid', '`assets.add()` needs `path` or `bytes`, not an identity');
+    }
+    return {
+        op: 'asset.add',
+        name: input.name,
+        mediaType: payload.asset.mediaType,
+        base64: payload.asset.base64,
+        license: input.license,
+    };
+}
+
+interface InlineAsset {
+    readonly name: string;
+    readonly mediaType: string;
+    readonly base64: string;
+}
+
+const MEDIA_TYPES: Readonly<Record<string, string>> = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.svg': 'image/svg+xml',
+    '.webp': 'image/webp',
+    '.bmp': 'image/bmp',
+    '.mp3': 'audio/mpeg',
+    '.wav': 'audio/wav',
+    '.m4a': 'audio/mp4',
+    '.mp4': 'video/mp4',
+    '.webm': 'video/webm',
+    '.mov': 'video/quicktime',
+};
+
+function payloadFor(
+    source: AssetId | BytesSource | AssetInput,
+    purpose: 'image' | 'audio' | 'video' | 'asset',
+): { assetId: string } | { asset: InlineAsset } {
+    if (typeof source === 'string') {
+        return { assetId: source };
+    }
+    const path = 'path' in source ? source.path : undefined;
+    const explicitBytes = 'bytes' in source ? source.bytes : undefined;
+    if (path === undefined && explicitBytes === undefined) {
+        throw new OpenPPTError('session/argument-invalid', `adding ${purpose} needs \`path\` or \`bytes\``);
+    }
+    const bytes = path === undefined ? Buffer.from(explicitBytes ?? new Uint8Array()) : readFileSync(path);
+    const provided = 'mediaType' in source ? source.mediaType : undefined;
+    const inferred = path === undefined ? undefined : MEDIA_TYPES[extname(path).toLowerCase()];
+    const mediaType = provided ?? inferred ?? (purpose === 'asset' ? 'application/octet-stream' : undefined);
+    if (mediaType === undefined) {
+        throw new OpenPPTError('session/argument-invalid', `adding ${purpose} bytes needs an explicit \`mediaType\``);
+    }
+    const name = 'name' in source ? source.name : path === undefined ? `${purpose}.${mediaType.split('/')[1] ?? 'bin'}` : basename(path);
+    return { asset: { name, mediaType, base64: bytes.toString('base64') } };
 }

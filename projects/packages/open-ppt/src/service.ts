@@ -66,6 +66,67 @@ export interface CreateDeckRequest {
     readonly slides?: ReadonlyArray<string>;
 }
 
+/** One typed operation of an edit script. */
+export type EditOperation = Record<string, unknown>;
+
+/** Atomic edit request; `expectedRevision` rejects a stale writer. */
+export interface EditRequest {
+    readonly expectedRevision?: number;
+    readonly operations: ReadonlyArray<EditOperation>;
+}
+
+/** One element of a slide detail. */
+export interface ElementDetail {
+    readonly id: string;
+    readonly kind: string;
+    readonly transform: {
+        readonly xPt: number;
+        readonly yPt: number;
+        readonly widthPt: number;
+        readonly heightPt: number;
+        readonly rotationDeg: number | null;
+    };
+    readonly alt: string | null;
+    readonly locked: boolean;
+    readonly text?: string;
+}
+
+/** One slide with its element tree. */
+export interface SlideDetail {
+    readonly id: string;
+    readonly index: number;
+    readonly title: string;
+    readonly hidden: boolean;
+    readonly layout: string | null;
+    readonly notes: string | null;
+    readonly elements: ReadonlyArray<ElementDetail>;
+}
+
+/** Result of one committed edit script. */
+export interface EditReport {
+    readonly deck: DeckSummary;
+    readonly revision: number;
+    readonly results: ReadonlyArray<string | null>;
+    readonly resolved: Readonly<Record<string, string>>;
+}
+
+/** Result of one undo or redo. */
+export interface HistoryReport {
+    readonly deck: DeckSummary;
+    readonly revision: number;
+    readonly changed: boolean;
+}
+
+/** One embedded asset without its bytes. */
+export interface AssetRecord {
+    readonly id: string;
+    readonly name: string;
+    readonly mediaType: string;
+    readonly bytes: number;
+    readonly sha256: string;
+    readonly license: string | null;
+}
+
 const knownCodes = new Set<string>(errorCodes);
 
 function binding(feature: string) {
@@ -136,6 +197,31 @@ export function inspect(handle: number, checks?: ReadonlyArray<InspectCheck>): I
 /** Walks the static show of one open deck. */
 export function play(handle: number): PlayReport {
     return decode<PlayReport>(() => binding('deck.play').deck_play(handle));
+}
+
+/** Applies one atomic edit script. */
+export function edit(handle: number, request: EditRequest): EditReport {
+    return decode<EditReport>(() => binding('deck.edit').deck_edit(handle, JSON.stringify(request)));
+}
+
+/** Reads one slide with its elements. */
+export function slide(handle: number, slideId: string): SlideDetail {
+    return decode<SlideDetail>(() => binding('deck.slide').deck_slide(handle, slideId));
+}
+
+/** Lists embedded assets without bytes. */
+export function assets(handle: number): ReadonlyArray<AssetRecord> {
+    return decode<{ readonly assets: ReadonlyArray<AssetRecord> }>(() => binding('deck.assets').deck_assets(handle)).assets;
+}
+
+/** Restores the previous committed document. */
+export function undo(handle: number): HistoryReport {
+    return decode<HistoryReport>(() => binding('deck.undo').deck_undo(handle));
+}
+
+/** Reapplies the last undone document. */
+export function redo(handle: number): HistoryReport {
+    return decode<HistoryReport>(() => binding('deck.redo').deck_redo(handle));
 }
 
 /** Releases one deck handle. */

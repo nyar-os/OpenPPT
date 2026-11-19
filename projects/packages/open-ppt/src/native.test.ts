@@ -65,6 +65,117 @@ test('create, save and reopen keep one handle per deck', { skip }, async () => {
     );
 });
 
+test('editing a slide commits once per operation and survives save/reopen', { skip }, async () => {
+    const ppt = new OpenPPT();
+    const deck = await ppt.create({ title: 'Edits' });
+    const slide = await deck.slides.add();
+    assert.equal(deck.revision, 1);
+    await slide.title.set('Metrics');
+    const text = await slide.elements.addText({
+        text: { paragraphs: [{ runs: [{ text: 'Hello', bold: true }] }] },
+        transform: { xPt: 60, yPt: 60, widthPt: 300, heightPt: 80 },
+        alt: 'Greeting',
+    });
+    const shape = await slide.elements.addShape({
+        geometry: 'rect',
+        transform: { xPt: 60, yPt: 160, widthPt: 200, heightPt: 100 },
+        fill: '#ff0000',
+    });
+    const table = await slide.elements.addTable({
+        rows: [[{ text: 'A' }, { text: 'B' }], [{ text: '1' }, { text: '2' }]],
+        transform: { xPt: 300, yPt: 60, widthPt: 240, heightPt: 80 },
+    });
+    const chart = await slide.elements.addChart({
+        type: 'column',
+        data: { categories: ['Q1', 'Q2'], series: [{ name: 'Sales', values: [1, 2] }] },
+        alt: 'Sales',
+        transform: { xPt: 300, yPt: 180, widthPt: 240, heightPt: 140 },
+    });
+    const formula = await slide.elements.addFormula({ expression: 'x^2', alt: 'Square' });
+    assert.deepEqual(
+        [text.kind, shape.kind, table.kind, chart.kind, formula.kind],
+        ['text', 'shape', 'table', 'chart', 'formula'],
+    );
+    await slide.notes.set('Speaker notes');
+    assert.equal(deck.revision, 8);
+
+    const dir = mkdtempSync(join(tmpdir(), 'open-ppt-'));
+    const target = join(dir, 'edits.project');
+    await deck.save({ target });
+
+    const reopened = await ppt.open({ path: target });
+    const [summary] = await reopened.slides.list();
+    assert.ok(summary);
+    const restored = await reopened.slides.get(summary.id);
+    assert.equal(await restored.title.get(), 'Metrics');
+    assert.equal(await restored.notes.get(), 'Speaker notes');
+    const element = await restored.elements.get(text.id);
+    assert.equal(element.alt, 'Greeting');
+    assert.equal(element.transform.widthPt, 300);
+    await reopened.close();
+    await ppt.dispose();
+});
+
+test('transactions commit atomically and leave no half page on failure', { skip }, async () => {
+    const ppt = new OpenPPT();
+    const deck = await ppt.create();
+    await deck.transaction((transaction) => {
+        const slide = transaction.addSlide();
+        transaction.setSlideTitle(slide, 'Agenda');
+        const element = transaction.addText(slide, { text: 'First item' });
+        transaction.updateElement(slide, element, { alt: 'first item' });
+    });
+    assert.equal((await deck.slides.list()).length, 1);
+    const [summary] = await deck.slides.list();
+    assert.ok(summary);
+    assert.equal(await (await deck.slides.get(summary.id)).title.get(), 'Agenda');
+
+    const revision = deck.revision;
+    await assert.rejects(
+        deck.transaction((transaction) => {
+            transaction.addSlide();
+            throw new Error('stop before commit');
+        }),
+        /stop before commit/,
+    );
+    assert.equal(deck.revision, revision);
+    assert.equal((await deck.slides.list()).length, 1);
+
+    await assert.rejects(
+        (await deck.slides.get(summary.id)).title.set('Stale', { expectedRevision: 0 }),
+        (error) => isOpenPPTError(error) && error.code === 'deck/revision-conflict',
+    );
+    await ppt.dispose();
+});
+
+test('undo, redo and embedded assets stay consistent', { skip }, async () => {
+    const ppt = new OpenPPT();
+    const deck = await ppt.create();
+    await deck.slides.add();
+    assert.equal((await deck.slides.list()).length, 1);
+    assert.equal(await deck.undo(), true);
+    assert.equal((await deck.slides.list()).length, 0);
+    assert.equal(await deck.redo(), true);
+    assert.equal((await deck.slides.list()).length, 1);
+
+    const png = Uint8Array.from(
+        Buffer.from(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+            'base64',
+        ),
+    );
+    const asset = await deck.assets.add({ name: 'dot.png', bytes: png, mediaType: 'image/png' });
+    assert.equal(asset.bytes, png.length);
+    const [summary] = await deck.slides.list();
+    assert.ok(summary);
+    const slide = await deck.slides.get(summary.id);
+    const image = await slide.elements.addImage({ source: asset.id, alt: 'Dot' });
+    assert.equal(image.kind, 'image');
+    assert.equal((await slide.elements.get(image.id)).alt, 'Dot');
+    assert.equal((await deck.assets.list()).length, 1);
+    await ppt.dispose();
+});
+
 test('unwired inputs keep stable codes instead of inventing a deck', { skip }, async () => {
     const ppt = new OpenPPT();
     await assert.rejects(

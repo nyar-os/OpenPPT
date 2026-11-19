@@ -20,6 +20,11 @@ export interface NativeBinding {
     deck_save(handle: number, path: string, overwrite: boolean): string;
     deck_inspect(handle: number, checksJson?: string): string;
     deck_play(handle: number): string;
+    deck_edit(handle: number, requestJson: string): string;
+    deck_slide(handle: number, slideId: string): string;
+    deck_assets(handle: number): string;
+    deck_undo(handle: number): string;
+    deck_redo(handle: number): string;
     deck_close(handle: number): boolean;
 }
 
