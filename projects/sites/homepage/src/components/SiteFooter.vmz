@@ -33,7 +33,7 @@
                 </a>
             </nav>
             <p class="site-footer__note">
-                MPL-2.0 licensed · Built with VMZ
+                Apache-2.0 licensed · Built with VMZ
             </p>
         </div>
     </footer>

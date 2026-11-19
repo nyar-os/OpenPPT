@@ -1,20 +1,17 @@
 ---
 name: open-ppt
-description: >-
-  Create, revise, review and deliver editable presentation decks with OpenPPT.
-  Use when a task involves slide decks, PPTX exchange, template fill or deck
-  review. The SDK and CLI are not implemented yet, so this skill records the
-  routing and evidence rules only and must not invent OpenPPT calls.
+description: Create, revise, review and deliver editable presentation decks with OpenPPT. Use when a task involves slide decks, PPTX exchange, template fill or deck review.
 ---
 
 # open-ppt
 
 ## Status
 
-Scaffold only. `@wae/open-ppt` exposes no authoring API yet, and there is no
-working CLI, renderer or PPTX exchange. Do not present any workflow below as
-executable, and do not fill the gap with local XML, ZIP, typesetting or drawing
-code.
+Scaffold. `@wae/open-ppt` can create, open, inspect, play and save the native
+editable deck, and `open-ppt gui` opens the VMZ editor window. PPTX write, the
+Display renderer and template fill are still unimplemented; do not present those
+routes as executable, and do not fill the gap with local XML, ZIP, typesetting or
+drawing code.
 
 ## Preflight
 
@@ -47,6 +44,13 @@ Once the SDK/CLI ships, every task starts here:
   verification source. The workflow must not require either.
 - Prefer native charts, tables, formulas and shapes over pasted pictures.
 - Aesthetic and narrative quality still require looking at the rendered pages.
+
+## Safety
+
+- Confirm with the user before any command that writes or overwrites a deck
+  file, and state the target path first.
+- Never delete, flatten or re-encode source assets without explicit
+  confirmation, and never overwrite an input deck in place unless asked.
 
 ## References
 

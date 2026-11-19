@@ -108,9 +108,17 @@ export default defineConfig({
             'projects/packages/open-ppt/dist/gui/index.html',
         ],
     },
-    // `skills` is unset: the bundled audit of this `@wae/wae` version requires
-    // an `Apache-2.0` skills package, while this workspace ships MPL-2.0.
-    // Re-add the block once the audit honours the workspace license.
+    skills: {
+        packages: [
+            {
+                dir: 'projects/packages/open-ppt-skills/skills',
+                packageJson: 'projects/packages/open-ppt-skills/package.json',
+                appPackageJson: 'projects/packages/open-ppt/package.json',
+                cliEntry: 'projects/packages/open-ppt/dist/cli.js',
+                commandName: 'open-ppt',
+            },
+        ],
+    },
     // `release` is intentionally unset while the app packages stay `private`;
     // the platform packages are the only publishable set and have no CI release
     // workflow yet.

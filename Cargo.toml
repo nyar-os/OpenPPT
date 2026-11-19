@@ -7,7 +7,7 @@ default-members = ["projects/crates/napi"]
 version = "0.0.0"
 edition = "2024"
 rust-version = "1.90"
-license = "MPL-2.0"
+license = "Apache-2.0"
 authors = ["OpenPPT Authors"]
 repository = "https://github.com/nyar-os/OpenPPT"
 

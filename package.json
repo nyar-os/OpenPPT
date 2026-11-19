@@ -5,7 +5,7 @@
     "packageManager": "pnpm@10.28.0",
     "description": "OpenPPT workspace: .pptx authoring, template decks, editable presentations, and agent skills",
     "keywords": ["pptx", "powerpoint", "presentation", "slide", "template"],
-    "license": "MPL-2.0",
+    "license": "Apache-2.0",
     "repository": "https://github.com/nyar-os/OpenPPT",
     "scripts": {
         "check:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
