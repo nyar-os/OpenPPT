@@ -74,7 +74,7 @@ impl From<io::Error> for ServiceError {
 pub fn capabilities() -> Value {
     let mut formats = Map::new();
     for format in PRESENTATION_FORMATS {
-        let entry = if *format == "pptx" {
+        let entry = if pptx::EXTENSIONS.contains(format) {
             json!({
                 "import": "partial",
                 "edit": "unsupported",
