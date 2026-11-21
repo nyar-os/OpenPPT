@@ -48,6 +48,7 @@ pub fn edit(deck: &mut Deck, request: &Value) -> Result<Value, ServiceError> {
 /// revision.
 enum Deferred {
     Reorder { slide: SlideId, element: ElementId, index: usize },
+    MoveSlide { slide: SlideId, index: usize },
     Background { slide: SlideId, fill: Option<Fill> },
 }
 
@@ -73,6 +74,14 @@ fn apply_deferred(deck: &mut Deck, deferred: Vec<Deferred>) -> Result<(), Servic
                 };
                 let moved = model.elements.remove(position);
                 model.elements.insert(index.min(model.elements.len()), moved);
+            }
+            Deferred::MoveSlide { slide, index } => {
+                let Some(position) = document.slides.iter().position(|candidate| candidate.id == slide)
+                else {
+                    continue;
+                };
+                let moved = document.slides.remove(position);
+                document.slides.insert(index.min(document.slides.len()), moved);
             }
             Deferred::Background { slide, fill } => {
                 if let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide) {
@@ -263,6 +272,21 @@ impl EditState {
                     .map(|value| self.slide_id_value(value))
                     .collect::<Result<Vec<_>, _>>()?;
                 draft.reorder_slides(&order)?;
+                None
+            }
+            "slide.move" => {
+                let slide = self.slide(operation)?;
+                let index = required_usize(operation, "index")?;
+                if draft.document().slide(&slide).is_none() {
+                    return Err(
+                        DeckError::new(codes::OBJECT_NOT_FOUND, format!("slide `{slide}` does not exist")).with_slide(slide)
+                    );
+                }
+                let slides = draft.document().slides.len();
+                if index >= slides {
+                    return Err(invalid(format!("`index` must be below {slides} for this deck")));
+                }
+                self.deferred.push(Deferred::MoveSlide { slide, index });
                 None
             }
             "slide.duplicate" => {
@@ -808,6 +832,63 @@ mod tests {
     fn svg(deck: &Deck) -> String {
         let report = crate::render::render(deck).expect("render succeeds");
         report["pages"][0]["svg"].as_str().expect("svg page").to_string()
+    }
+
+    fn titled_deck(titles: &[&str]) -> (Deck, Vec<String>) {
+        let mut deck = Deck::create(DeckCreateOptions::default());
+        let mut ids = Vec::new();
+        deck.transaction(None, |edit| {
+            for title in titles {
+                let slide = edit.add_slide(SlideAddOptions { layout: None, index: None })?;
+                edit.set_slide_title(&slide, (*title).to_string())?;
+                ids.push(slide.as_str().to_string());
+            }
+            Ok(())
+        })
+        .expect("titled deck builds");
+        (deck, ids)
+    }
+
+    fn slide_titles(deck: &Deck) -> Vec<String> {
+        deck.slides().iter().map(|slide| slide.title()).collect()
+    }
+
+    #[test]
+    fn slide_move_reorders_one_slide_without_touching_the_others() {
+        let (mut deck, ids) = titled_deck(&["Intro", "Plan", "Close"]);
+        let revision = deck.revision();
+        let report = edit(
+            &mut deck,
+            &json!({ "operations": [{ "op": "slide.move", "slideId": ids[2], "index": 0 }] }),
+        )
+        .expect("slide move commits");
+
+        assert_eq!(report["revision"], revision + 1, "one script is one revision bump");
+        assert_eq!(slide_titles(&deck), ["Close", "Intro", "Plan"]);
+        assert_eq!(report["deck"]["slides"][0]["id"].as_str(), Some(ids[2].as_str()));
+    }
+
+    #[test]
+    fn slide_move_rejects_unknown_slides_and_out_of_range_indexes() {
+        let (mut deck, ids) = titled_deck(&["Intro", "Plan"]);
+        let revision = deck.revision();
+
+        let error = edit(
+            &mut deck,
+            &json!({ "operations": [{ "op": "slide.move", "slideId": "slide-missing", "index": 0 }] }),
+        )
+        .expect_err("an unknown slide is refused");
+        assert_eq!(error.code, "object/not-found");
+
+        let error = edit(
+            &mut deck,
+            &json!({ "operations": [{ "op": "slide.move", "slideId": ids[0], "index": 2 }] }),
+        )
+        .expect_err("an out-of-range index is refused");
+        assert_eq!(error.code, "session/argument-invalid");
+
+        assert_eq!(deck.revision(), revision, "failed moves consume no revision");
+        assert_eq!(slide_titles(&deck), ["Intro", "Plan"], "the order is unchanged");
     }
 
     #[test]

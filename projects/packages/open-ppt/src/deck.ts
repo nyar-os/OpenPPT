@@ -113,6 +113,12 @@ export class Deck {
             reorder: async (slideIds: readonly SlideId[]) => {
                 this.apply([{ op: 'slide.reorder', slideIds }]);
             },
+            move: async (slideId: SlideId, index: number) => {
+                if (!Number.isInteger(index) || index < 0) {
+                    throw new OpenPPTError('session/argument-invalid', '`index` must be a non-negative integer');
+                }
+                this.apply([{ op: 'slide.move', slideId, index }]);
+            },
             duplicate: async (slideId: SlideId, options?: { readonly index?: number }) => {
                 const report = this.apply([{ op: 'slide.duplicate', slideId, index: options?.index }]);
                 return new SlideView(this, created(report.results, 'slide.duplicate'));
@@ -693,6 +699,10 @@ class BufferedTransaction implements DeckTransaction {
 
     removeSlide(slideId: SlideId): void {
         this.operations.push({ op: 'slide.remove', slideId });
+    }
+
+    moveSlide(slideId: SlideId, index: number): void {
+        this.operations.push({ op: 'slide.move', slideId, index });
     }
 
     reorderSlides(slideIds: readonly SlideId[]): void {

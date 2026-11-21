@@ -407,6 +407,13 @@ export interface SlidesApi {
     get(slideId: SlideId): Promise<Slide>;
     list(): Promise<readonly SlideSummary[]>;
     reorder(slideIds: readonly SlideId[]): Promise<void>;
+    /**
+     * Moves one slide to a zero-based position without re-listing the deck.
+     *
+     * Answers with `object/not-found` for an unknown slide and
+     * `session/argument-invalid` when the index is outside the deck.
+     */
+    move(slideId: SlideId, index: number): Promise<void>;
     duplicate(slideId: SlideId, options?: { readonly index?: number }): Promise<Slide>;
     remove(slideId: SlideId): Promise<void>;
 }
@@ -489,6 +496,7 @@ export interface DeckTransaction {
     addSlide(options?: SlideAddOptions): SlideId;
     duplicateSlide(slideId: SlideId, options?: { readonly index?: number }): SlideId;
     removeSlide(slideId: SlideId): void;
+    moveSlide(slideId: SlideId, index: number): void;
     reorderSlides(slideIds: readonly SlideId[]): void;
     setSlideTitle(slideId: SlideId, text: TextInput): void;
     setSlideNotes(slideId: SlideId, text: TextInput | null): void;
