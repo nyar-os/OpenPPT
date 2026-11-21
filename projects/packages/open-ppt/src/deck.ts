@@ -65,6 +65,7 @@ import type {
     TextTarget,
     ThemesApi,
     Transform,
+    ZOrder,
 } from './types.js';
 
 /** Session that owns deck handles. Implemented by `OpenPPT`. */
@@ -660,10 +661,18 @@ class ElementsView {
         });
     }
 
-    async zOrder(): Promise<void> {
-        throw new OpenPPTError('object/unsupported', 'stacking commands are not editable yet', {
-            details: { feature: 'elements.zOrder' },
-        });
+    async zOrder(elementId: ElementId, order: ZOrder): Promise<void> {
+        const operations: Record<ZOrder, string> = {
+            front: 'element.bringToFront',
+            back: 'element.sendToBack',
+            forward: 'element.bringForward',
+            backward: 'element.sendBackward',
+        };
+        const operation = operations[order];
+        if (operation === undefined) {
+            throw new OpenPPTError('session/argument-invalid', `\`${String(order)}\` is not a stacking command`);
+        }
+        this.deck.apply([{ op: operation, slideId: this.slideId, elementId }]);
     }
 
     async lock(elementId: ElementId, flags: LockFlags): Promise<void> {

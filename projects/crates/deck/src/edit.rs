@@ -463,6 +463,27 @@ impl EditState {
                 self.deferred.push(Deferred::Reorder { slide, element, index });
                 None
             }
+            "element.bringToFront" | "element.sendToBack" | "element.bringForward" | "element.sendBackward" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let model = draft.document().slide(&slide).ok_or_else(|| {
+                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("slide `{slide}` does not exist")).with_slide(slide.clone())
+                })?;
+                let position = model.elements.iter().position(|candidate| candidate.id == element).ok_or_else(|| {
+                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
+                        .with_slide(slide.clone())
+                        .with_element(element.clone())
+                })?;
+                let last = model.elements.len().saturating_sub(1);
+                let index = match name {
+                    "element.bringToFront" => last,
+                    "element.sendToBack" => 0,
+                    "element.bringForward" => (position + 1).min(last),
+                    _ => position.saturating_sub(1),
+                };
+                self.deferred.push(Deferred::Reorder { slide, element, index });
+                None
+            }
             "element.remove" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
@@ -889,6 +910,74 @@ mod tests {
 
         assert_eq!(deck.revision(), revision, "failed moves consume no revision");
         assert_eq!(slide_titles(&deck), ["Intro", "Plan"], "the order is unchanged");
+    }
+
+    fn element_ids(deck: &Deck, slide: &str) -> Vec<String> {
+        slide_detail(deck, slide).expect("slide exists")["elements"]
+            .as_array()
+            .expect("elements")
+            .iter()
+            .filter_map(|element| element["id"].as_str().map(str::to_string))
+            .collect()
+    }
+
+    #[test]
+    fn z_order_commands_restack_one_element() {
+        for name in ["element.bringToFront", "element.bringForward"] {
+            let (mut deck, slide, first, second) = two_shapes();
+            let revision = deck.revision();
+            let report = edit(
+                &mut deck,
+                &json!({ "operations": [{ "op": name, "slideId": slide, "elementId": first }] }),
+            )
+            .expect("restack commits");
+
+            assert_eq!(report["revision"], revision + 1, "{name} is one revision bump");
+            assert_eq!(element_ids(&deck, &slide), [second.clone(), first.clone()], "{name} raises the first element");
+            let painted = svg(&deck);
+            assert!(
+                painted.find("fill=\"#00FF00\"").unwrap() < painted.find("fill=\"#FF0000\"").unwrap(),
+                "{name} paints the raised element last: {painted}"
+            );
+        }
+
+        for name in ["element.sendToBack", "element.sendBackward"] {
+            let (mut deck, slide, first, second) = two_shapes();
+            edit(
+                &mut deck,
+                &json!({ "operations": [{ "op": name, "slideId": slide, "elementId": second }] }),
+            )
+            .expect("restack commits");
+
+            assert_eq!(element_ids(&deck, &slide), [second.clone(), first.clone()], "{name} lowers the second element");
+        }
+    }
+
+    #[test]
+    fn z_order_rejects_unknown_slides_and_elements() {
+        let (mut deck, slide, first, second) = two_shapes();
+        let revision = deck.revision();
+
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [{ "op": "element.bringToFront", "slideId": slide, "elementId": "element-missing" }],
+            }),
+        )
+        .expect_err("an unknown element is refused");
+        assert_eq!(error.code, "object/not-found");
+
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [{ "op": "element.sendToBack", "slideId": "slide-missing", "elementId": first }],
+            }),
+        )
+        .expect_err("an unknown slide is refused");
+        assert_eq!(error.code, "object/not-found");
+
+        assert_eq!(deck.revision(), revision, "failed restacks consume no revision");
+        assert_eq!(element_ids(&deck, &slide), [first, second], "the order is unchanged");
     }
 
     #[test]
