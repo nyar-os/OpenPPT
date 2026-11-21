@@ -5,6 +5,7 @@
             "capabilities": "Print what this build supports, honestly",
             "create": "Create a native deck and save it to a project file",
             "open": "Open a project file and print its committed revision and slides",
+            "import": "Import a PresentationML package as an editable project",
             "inspect": "Run geometry and rule checks on a project file",
             "play": "Walk the static show of a project file, or play a PPTX package",
             "render": "Render every slide of a project file to a standalone SVG",
@@ -13,6 +14,7 @@
         },
         "opt": {
             "out": "Project file to write",
+            "importOut": "Native project file to write after import",
             "title": "Deck title",
             "size": "Slide ratio: 16:9, 4:3 or 16:10",
             "slide": "Add a slide with this title (repeatable)",

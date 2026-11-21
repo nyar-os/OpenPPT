@@ -17,6 +17,7 @@ import type {
     DeckSize,
     InspectOptions,
     InspectReport,
+    ImportLoss,
     OpenPPTCapabilities,
     OpenPPTOptions,
 } from './types.js';
@@ -106,6 +107,22 @@ export class OpenPPT implements DeckOwner {
         }
     }
 
+    /**
+     * Imports a `.pptx`-family package as an editable deck.
+     *
+     * Text, placeholders, pictures, preset shapes and tables are carried.
+     * Refused constructs (charts, SmartArt, OLE objects, media, groups) are
+     * reported on {@link Deck.importLosses} instead of being faked.
+     */
+    async importPptx(path: string): Promise<Deck> {
+        this.assertActive();
+        if (typeof path !== 'string' || path.trim().length === 0) {
+            throw new OpenPPTError('session/argument-invalid', '`importPptx()` needs a non-empty package path');
+        }
+        const imported = service.importPptx(path);
+        return this.attach(imported, 'pptx', 'edit', imported.losses);
+    }
+
     /** Releases the session and every handle it owns. Idempotent. */
     async dispose(): Promise<void> {
         if (this.closed) {
@@ -135,8 +152,13 @@ export class OpenPPT implements DeckOwner {
         this.decks.delete(deck);
     }
 
-    private attach(opened: service.DeckHandle, format: PresentationFormat = 'pptx', intent: DeckIntent = 'edit'): Deck {
-        const deck = Deck.attach(this, opened, format, intent);
+    private attach(
+        opened: service.DeckHandle,
+        format: PresentationFormat = 'pptx',
+        intent: DeckIntent = 'edit',
+        importLosses: ReadonlyArray<ImportLoss> = [],
+    ): Deck {
+        const deck = Deck.attach(this, opened, format, intent, importLosses);
         this.decks.add(deck);
         return deck;
     }

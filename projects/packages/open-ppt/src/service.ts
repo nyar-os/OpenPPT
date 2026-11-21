@@ -11,6 +11,7 @@ import { nativeBinding } from './native.js';
 import type {
     ExportFormat,
     ExportReport,
+    ImportLoss,
     InspectCheck,
     InspectReport,
     LossPolicy,
@@ -183,6 +184,16 @@ export function create(request: CreateDeckRequest): DeckHandle {
 /** Opens a native project and returns its handle. */
 export function open(path: string): DeckHandle {
     return decode<DeckHandle>(() => binding('open').deck_open(path));
+}
+
+/** Result of importing a PresentationML package as an editable deck. */
+export interface ImportedDeckHandle extends DeckHandle {
+    readonly losses: ReadonlyArray<ImportLoss>;
+}
+
+/** Imports a `.pptx`-family package into an editable deck handle. */
+export function importPptx(path: string): ImportedDeckHandle {
+    return decode<ImportedDeckHandle>(() => binding('import').deck_import_pptx(path));
 }
 
 /** Reads the summary of an open deck. */

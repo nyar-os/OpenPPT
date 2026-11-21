@@ -34,6 +34,7 @@ import type {
     ExportReport,
     FormulaElementInput,
     ImageElementInput,
+    ImportLoss,
     InspectOptions,
     InspectReport,
     LayoutId,
@@ -74,6 +75,7 @@ interface DeckState {
     readonly owner: DeckOwner;
     readonly format: PresentationFormat;
     readonly intent: DeckIntent;
+    readonly importLosses: ReadonlyArray<ImportLoss>;
     closed: boolean;
 }
 
@@ -159,8 +161,14 @@ export class Deck {
     }
 
     /** @internal Builds the wrapper for a handle returned by the native layer. */
-    static attach(owner: DeckOwner, opened: DeckHandle, format: PresentationFormat, intent: DeckIntent): Deck {
-        return new Deck({ handle: opened.handle, summary: opened.deck, owner, format, intent, closed: false });
+    static attach(
+        owner: DeckOwner,
+        opened: DeckHandle,
+        format: PresentationFormat,
+        intent: DeckIntent,
+        importLosses: ReadonlyArray<ImportLoss> = [],
+    ): Deck {
+        return new Deck({ handle: opened.handle, summary: opened.deck, owner, format, intent, importLosses, closed: false });
     }
 
     /** Stable deck identity; never derived from a file name. */
@@ -191,6 +199,16 @@ export class Deck {
     /** Intent resolved at open time (`edit`, `play` or `template`). */
     get intent(): DeckIntent {
         return this.state.intent;
+    }
+
+    /**
+     * Constructs the editable import could not carry.
+     *
+     * Empty for created and opened native projects; populated by
+     * `OpenPPT.importPptx()` with stable `import.pptx.*` codes.
+     */
+    get importLosses(): ReadonlyArray<ImportLoss> {
+        return this.state.importLosses;
     }
 
     /** Whether {@link close} has run. */

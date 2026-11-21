@@ -152,6 +152,37 @@ cli.command('open', 'cli.cmd.open').actionCtx(async (options, _args, ctx) => {
 });
 
 cli
+    .command('import', 'cli.cmd.import')
+    .option('--out <file>', 'cli.opt.importOut')
+    .option('--overwrite', 'cli.opt.overwrite')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-ppt.cli.file-required', { message: 'a presentation file is required' });
+            return 2;
+        }
+        const imported = service.importPptx(file);
+        try {
+            const out = text(options, 'out');
+            const saved = out === undefined ? undefined : service.save(imported.handle, out, flag(options, 'overwrite'));
+            const lines = [describeDeck(imported.deck)];
+            if (saved !== undefined) {
+                lines.push(`saved ${saved.path} bytes=${saved.bytes}`);
+            }
+            for (const loss of imported.losses) {
+                lines.push(`  ${loss.status} ${loss.code} slide=${loss.slide ?? '-'} shape=${loss.shape ?? '-'} ${loss.message}`);
+            }
+            ctx.emitResult(
+                { deck: imported.deck, losses: imported.losses, ...(saved === undefined ? {} : { saved }) },
+                lines.join('\n'),
+            );
+        } finally {
+            service.close(imported.handle);
+        }
+        return 0;
+    });
+
+cli
     .command('inspect', 'cli.cmd.inspect')
     .option('--checks <list>', 'cli.opt.checks')
     .actionCtx(async (options, _args, ctx) => {

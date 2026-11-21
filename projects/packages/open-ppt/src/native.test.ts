@@ -29,10 +29,11 @@ test('capabilities mirror the native matrix instead of a local guess', { skip },
     const capabilities = await ppt.capabilities();
     const matrix = capabilities as unknown as {
         project: { import: string; playback: string };
-        formats: { pptx: { import: string } };
+        formats: { pptx: { import: string; edit: string } };
         checks: { contrast: string; overflow: string };
         renderers: { svg: string; png: string };
         exportTargets: { pptx: string; ppsx: string; pdf: string };
+        exportLossCodes: { pptx: readonly string[] };
         playback: { staticSlides: string };
     };
 
@@ -42,11 +43,13 @@ test('capabilities mirror the native matrix instead of a local guess', { skip },
     assert.equal(matrix.checks.contrast, 'supported');
     assert.equal(matrix.checks.overflow, 'unsupported');
     assert.equal(matrix.formats.pptx.import, 'partial');
+    assert.equal(matrix.formats.pptx.edit, 'partial');
     assert.equal(matrix.renderers.svg, 'supported');
     assert.equal(matrix.renderers.png, 'unsupported');
     assert.equal(matrix.exportTargets.pptx, 'partial');
     assert.equal(matrix.exportTargets.ppsx, 'partial');
     assert.equal(matrix.exportTargets.pdf, 'unsupported');
+    assert.ok(!matrix.exportLossCodes.pptx.includes('table'), 'tables are no longer an export loss');
 });
 
 test('create, save and reopen keep one handle per deck', { skip }, async () => {
@@ -234,6 +237,52 @@ test('render and export answer with real pages and a real package', { skip }, as
     await assert.rejects(
         deck.export({ format: 'pdf', target: join(dir, 'deck.pdf') }),
         (error) => isOpenPPTError(error) && error.code === 'capability/not-implemented',
+    );
+    await ppt.dispose();
+});
+
+test('exported packages import back as editable decks', { skip }, async () => {
+    const ppt = new OpenPPT();
+    const deck = await ppt.create({ title: 'Import', size: { widthPt: 960, heightPt: 540 } });
+    const slide = await deck.slides.add();
+    await slide.title.set('Plan');
+    await slide.elements.addText({
+        text: { paragraphs: [{ runs: [{ text: 'Hello import', bold: true }] }] },
+        transform: { xPt: 60, yPt: 80, widthPt: 380, heightPt: 80 },
+        alt: 'Greeting',
+    });
+    await slide.elements.addTable({
+        rows: [[{ text: 'A' }, { text: 'B' }], [{ text: '1' }, { text: '2' }]],
+        transform: { xPt: 60, yPt: 200, widthPt: 240, heightPt: 80 },
+    });
+
+    const dir = mkdtempSync(join(tmpdir(), 'open-ppt-import-'));
+    const target = join(dir, 'import.pptx');
+    await deck.export({ format: 'pptx', target });
+
+    const imported = await ppt.importPptx(target);
+    assert.equal(imported.format, 'pptx');
+    assert.equal(imported.intent, 'edit');
+    assert.equal(imported.size.widthPt, 960);
+    assert.equal(imported.size.heightPt, 540);
+    assert.equal(
+        imported.importLosses.filter((loss) => loss.slide !== null).length,
+        0,
+        'text, pictures and tables import without slide-scoped content losses',
+    );
+
+    const slides = await imported.slides.list();
+    assert.equal(slides.length, 1);
+    assert.ok(slides[0]);
+    assert.equal(await (await imported.slides.get(slides[0].id)).title.get(), 'Plan');
+
+    const again = join(dir, 'import-again.pptx');
+    const exported = await imported.export({ format: 'pptx', target: again });
+    assert.ok(exported.bytes > 0);
+
+    await assert.rejects(
+        ppt.importPptx(''),
+        (error) => isOpenPPTError(error) && error.code === 'session/argument-invalid',
     );
     await ppt.dispose();
 });

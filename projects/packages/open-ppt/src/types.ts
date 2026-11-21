@@ -576,6 +576,20 @@ export interface ExportLoss {
     readonly message: string;
 }
 
+/**
+ * One construct an editable import could not carry.
+ *
+ * Codes are stable (`import.pptx.*`) and location fields use the source package:
+ * `slide` is one-based and `shape` is the authored shape id.
+ */
+export interface ImportLoss {
+    readonly code: string;
+    readonly status: 'partial' | 'unsupported';
+    readonly slide: number | null;
+    readonly shape: number | null;
+    readonly message: string;
+}
+
 /** Result of `deck.export()`. Reports what the target actually kept. */
 export interface ExportReport {
     readonly revision: number;

@@ -25,8 +25,8 @@ source of truth. This build wires:
 | Area | Status | Notes |
 | --- | --- | --- |
 | Native project | supported | create, edit, undo/redo, save, static playback |
-| PPTX import and playback | partial | charts, SmartArt, OLE objects, media, groups and tables are refused or reported with stable loss codes |
-| PPTX / PPSX / POTX export | partial | text, preset shapes, pictures and slide backgrounds are written; tables, charts, formulas, media and groups are skipped and reported |
+| PPTX import and playback | partial | `.pptx`-family packages open as editable decks: text, placeholders, pictures, preset shapes and tables are carried. Charts, SmartArt, OLE objects, media, groups and slide backgrounds are refused or reported with stable loss codes |
+| PPTX / PPSX / POTX export | partial | text, preset shapes, pictures, tables and slide backgrounds are written; charts, formulas, media and groups are skipped and reported |
 | SVG rendering | supported | one standalone SVG page per slide |
 | PNG / PDF rendering | unsupported | needs a raster backend this build does not ship |
 | Timed builds, transitions, media playback | unsupported | the static model has no timeline |
@@ -49,6 +49,7 @@ anything would be dropped.
 open-ppt capabilities
 open-ppt create --title "Research review" --size 16:9 --out deck.project
 open-ppt open deck.project
+open-ppt import slides.pptx --out deck.project
 open-ppt inspect deck.project
 open-ppt render deck.project --format svg --out slides/
 open-ppt export deck.project --format pptx --out output.pptx --overwrite
@@ -59,8 +60,8 @@ open-ppt play deck.pptx
 import { OpenPPT } from '@wae/open-ppt';
 
 const ppt = new OpenPPT();
-const deck = await ppt.create({ title: 'Research review', size: '16:9', theme: 'editorial-light' });
-await deck.slides.add();
+const deck = await ppt.importPptx('slides.pptx');
+console.log(deck.importLosses); // stable import.pptx.* codes, never silent drops
 await deck.render({ format: 'svg', target: 'slides/' });
 await deck.export({ format: 'pptx', target: 'output.pptx' });
 await ppt.dispose();
