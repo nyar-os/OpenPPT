@@ -10,6 +10,7 @@
 pub mod edit;
 pub mod export;
 pub mod import;
+pub mod outline;
 mod pdf;
 pub mod pptx;
 pub mod render;

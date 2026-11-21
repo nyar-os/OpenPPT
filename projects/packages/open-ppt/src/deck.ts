@@ -46,6 +46,7 @@ import type {
     LockFlags,
     MastersApi,
     MediaElementInput,
+    OutlineSlide,
     PlaybackApi,
     RenderOptions,
     RenderReport,
@@ -258,13 +259,38 @@ export class Deck {
     /**
      * Lists slide titles, notes, hidden flags and element counts.
      *
-     * The outline comes from the committed summary, so it never triggers a
-     * render.
+     * The default outline comes from the committed summary and never triggers a
+     * render. With `points: true` the body text of every slide is projected as
+     * talking points, still without a render. `maxPointsPerSlide` (1 to 20,
+     * default 6) only applies with `points`.
      */
-    outline(): DeckOutline {
+    outline(options: { readonly points?: boolean; readonly maxPointsPerSlide?: number } = {}): DeckOutline {
         this.assertOpen('deck.outline');
-        this.refresh();
-        return buildOutline(this.state.summary);
+        if (options.points !== true) {
+            if (options.maxPointsPerSlide !== undefined) {
+                throw new OpenPPTError('session/argument-invalid', '`maxPointsPerSlide` requires `points: true`');
+            }
+            this.refresh();
+            return buildOutline(this.state.summary);
+        }
+        const report = service.outline(
+            this.handle('deck.outline'),
+            options.maxPointsPerSlide === undefined ? {} : { maxPointsPerSlide: options.maxPointsPerSlide },
+        );
+        return {
+            revision: report.revision,
+            slides: report.slides.map(
+                (slide): OutlineSlide => ({
+                    id: slide.id,
+                    index: slide.index,
+                    title: slide.title,
+                    ...(slide.notes === null || slide.notes.length === 0 ? {} : { notes: slide.notes }),
+                    hidden: slide.hidden,
+                    elementCount: slide.elements,
+                    points: slide.points,
+                }),
+            ),
+        };
     }
 
     /**

@@ -34,6 +34,7 @@
             "exportFormat": "Export format: pptx, ppsx, potx or pdf",
             "exportOut": "PresentationML package or PDF to write",
             "checks": "Comma-separated checks: overflow, contrast, alignment, assets, fonts, out-of-bounds",
+            "outlinePoints": "Include body text lines as talking points per slide",
             "ops": "Operations array or full edit request as inline JSON",
             "editScript": "JSON file holding an operations array or a full edit request",
             "expectedRevision": "Reject the edit unless the deck is at this committed revision",

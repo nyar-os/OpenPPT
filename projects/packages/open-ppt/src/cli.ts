@@ -162,9 +162,13 @@ function describeOutline(outline: DeckOutline): string {
     const lines = [`outline revision=${outline.revision} slides=${outline.slides.length}`];
     for (const slide of outline.slides) {
         const notes = slide.notes === undefined ? '' : ` notes=${JSON.stringify(slide.notes)}`;
+        const points = slide.points === undefined ? '' : ` points=${slide.points.length}`;
         lines.push(
-            `  [${slide.index}] ${slide.id} ${slide.title}${slide.hidden ? ' (hidden)' : ''} elements=${slide.elementCount}${notes}`,
+            `  [${slide.index}] ${slide.id} ${slide.title}${slide.hidden ? ' (hidden)' : ''} elements=${slide.elementCount}${notes}${points}`,
         );
+        for (const point of slide.points ?? []) {
+            lines.push(`      - ${point}`);
+        }
     }
     return lines.join('\n');
 }
@@ -604,7 +608,7 @@ cli
         return 0;
     });
 
-cli.command('outline', 'cli.cmd.outline').actionCtx(async (options, _args, ctx) => {
+cli.command('outline', 'cli.cmd.outline').option('--points', 'cli.opt.outlinePoints').actionCtx(async (options, _args, ctx) => {
     const file = input(options);
     if (file === undefined) {
         ctx.fail('open-ppt.cli.file-required', { message: 'a project file is required' });
@@ -612,7 +616,7 @@ cli.command('outline', 'cli.cmd.outline').actionCtx(async (options, _args, ctx) 
     }
     await withSession(async (ppt) => {
         const deck = await ppt.open({ path: file });
-        const outline = deck.outline();
+        const outline = deck.outline({ points: flag(options, 'points') });
         ctx.emitResult(outline, describeOutline(outline));
     });
     return 0;

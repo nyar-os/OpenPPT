@@ -207,6 +207,28 @@ export function summary(handle: number): DeckSummary {
     return decode<DeckSummary>(() => binding('deck.summary').deck_summary(handle));
 }
 
+/** One slide of the projected outline, including talking points. */
+export interface OutlineSlideReport {
+    readonly id: string;
+    readonly index: number;
+    readonly title: string;
+    readonly hidden: boolean;
+    readonly elements: number;
+    readonly notes: string | null;
+    readonly points: ReadonlyArray<string>;
+}
+
+/** Result of the projected outline. */
+export interface OutlineReport {
+    readonly revision: number;
+    readonly slides: ReadonlyArray<OutlineSlideReport>;
+}
+
+/** Projects one entry per slide with titles, notes and body lines. */
+export function outline(handle: number, request: { readonly maxPointsPerSlide?: number } = {}): OutlineReport {
+    return decode<OutlineReport>(() => binding('deck.outline').deck_outline(handle, JSON.stringify(request)));
+}
+
 /** Writes one open deck to a native project path. */
 export function save(handle: number, target: string, overwrite: boolean): SaveReport {
     return decode<SaveReport>(() => binding('deck.save').deck_save(handle, target, overwrite));

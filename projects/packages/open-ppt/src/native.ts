@@ -18,6 +18,7 @@ export interface NativeBinding {
     deck_open(path: string): string;
     deck_import_pptx(path: string): string;
     deck_summary(handle: number): string;
+    deck_outline(handle: number, requestJson?: string): string;
     deck_save(handle: number, path: string, overwrite: boolean): string;
     deck_inspect(handle: number, checksJson?: string): string;
     deck_play(handle: number): string;

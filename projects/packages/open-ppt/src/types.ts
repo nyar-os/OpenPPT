@@ -656,9 +656,16 @@ export interface OutlineSlide {
     readonly notes?: string;
     readonly hidden: boolean;
     readonly elementCount: number;
+    /** Body text lines, present when `outline({ points: true })` was asked for. */
+    readonly points?: readonly string[];
 }
 
-/** Whole-deck outline read from the committed summary; never a render. */
+/**
+ * Whole-deck outline.
+ *
+ * The default projection reads the committed summary and never renders. Asking
+ * for `points` also reads each slide's text elements, still without a render.
+ */
 export interface DeckOutline {
     readonly revision: number;
     readonly slides: readonly OutlineSlide[];

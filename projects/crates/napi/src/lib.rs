@@ -226,6 +226,17 @@ fn deck_summary(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &summary)
 }
 
+/// Lists one entry per slide with titles, notes and projected talking points.
+///
+/// The optional request accepts `maxPointsPerSlide` (1 to 20, default 6).
+#[function]
+fn deck_outline(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = optional_json(&ctx, 1)?;
+    let report = with_deck(handle, |deck| open_ppt_deck::outline::outline(deck, &request))?.map_err(fail)?;
+    respond(&ctx, &report)
+}
+
 /// Writes one open deck to a native project path.
 #[function]
 fn deck_save(ctx: CallContext) -> Result<JsValue> {
@@ -920,6 +931,7 @@ register_module![
     deck_open,
     deck_import_pptx,
     deck_summary,
+    deck_outline,
     deck_save,
     deck_inspect,
     deck_play,
