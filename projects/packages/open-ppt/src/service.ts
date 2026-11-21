@@ -8,7 +8,15 @@
 
 import { NotImplementedError, OpenPPTError, errorCodes, type OpenPPTErrorCode } from './errors.js';
 import { nativeBinding } from './native.js';
-import type { InspectCheck, InspectReport, OpenPPTCapabilities } from './types.js';
+import type {
+    ExportFormat,
+    ExportReport,
+    InspectCheck,
+    InspectReport,
+    LossPolicy,
+    OpenPPTCapabilities,
+    RenderReport,
+} from './types.js';
 
 /** One slide of a deck summary. */
 export interface DeckSummarySlide {
@@ -197,6 +205,24 @@ export function inspect(handle: number, checks?: ReadonlyArray<InspectCheck>): I
 /** Walks the static show of one open deck. */
 export function play(handle: number): PlayReport {
     return decode<PlayReport>(() => binding('deck.play').deck_play(handle));
+}
+
+/** Renders every slide of one open deck to standalone SVG pages. */
+export function render(handle: number, request: { readonly format?: 'svg' } = {}): RenderReport {
+    return decode<RenderReport>(() => binding('deck.render').deck_render(handle, JSON.stringify(request)));
+}
+
+/** Arguments of {@link exportDeck}. */
+export interface ExportDeckRequest {
+    readonly format: ExportFormat;
+    readonly target: string;
+    readonly overwrite?: boolean;
+    readonly lossPolicy?: LossPolicy;
+}
+
+/** Writes one open deck as a PresentationML package. */
+export function exportDeck(handle: number, request: ExportDeckRequest): ExportReport {
+    return decode<ExportReport>(() => binding('deck.export').deck_export(handle, JSON.stringify(request)));
 }
 
 /** Applies one atomic edit script. */

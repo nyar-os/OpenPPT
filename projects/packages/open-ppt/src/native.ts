@@ -26,6 +26,8 @@ export interface NativeBinding {
     deck_asset(handle: number, assetId: string): string;
     deck_undo(handle: number): string;
     deck_redo(handle: number): string;
+    deck_render(handle: number, requestJson?: string): string;
+    deck_export(handle: number, requestJson: string): string;
     deck_close(handle: number): boolean;
     pptx_open(path: string): string;
     pptx_slide(handle: number, index: number): string;

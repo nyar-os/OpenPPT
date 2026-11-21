@@ -7,6 +7,8 @@
             "open": "Open a project file and print its committed revision and slides",
             "inspect": "Run geometry and rule checks on a project file",
             "play": "Walk the static show of a project file, or play a PPTX package",
+            "render": "Render every slide of a project file to a standalone SVG",
+            "export": "Write a project file as an editable PresentationML package",
             "gui": "Open the VMZ editor window on the native deck"
         },
         "opt": {
@@ -16,6 +18,10 @@
             "slide": "Add a slide with this title (repeatable)",
             "overwrite": "Replace the output file when it already exists",
             "svg": "Directory to write one SVG frame per slide",
+            "outDir": "Directory to write one SVG per slide",
+            "renderFormat": "Render format: svg",
+            "exportFormat": "Export format: pptx, ppsx or potx",
+            "exportOut": "PresentationML package to write",
             "checks": "Comma-separated checks: overflow, contrast, alignment, assets, fonts, out-of-bounds"
         }
     }

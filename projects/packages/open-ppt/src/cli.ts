@@ -16,7 +16,7 @@ import { createCli } from '@wae/commander';
 import * as service from './service.js';
 import { runGui } from './gui.js';
 import type { DeckSummary, PlayFrame, PptxPresentation } from './service.js';
-import type { InspectCheck, InspectReport, OpenPPTCapabilities } from './types.js';
+import type { ExportFormat, InspectCheck, InspectReport, OpenPPTCapabilities } from './types.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -210,6 +210,88 @@ cli
         try {
             const report = service.play(opened.handle);
             ctx.emitResult(report, report.frames.map(describeFrame).join('\n'));
+        } finally {
+            service.close(opened.handle);
+        }
+        return 0;
+    });
+
+cli
+    .command('render', 'cli.cmd.render')
+    .option('--out <dir>', 'cli.opt.outDir')
+    .option('--format <format>', 'cli.opt.renderFormat', { enum: ['svg'] })
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-ppt.cli.file-required', { message: 'a project file is required' });
+            return 2;
+        }
+        const format = text(options, 'format') ?? 'svg';
+        if (format !== 'svg') {
+            ctx.fail('open-ppt.cli.format-unsupported', { message: `the \`${format}\` renderer is not implemented` });
+            return 2;
+        }
+        const out = text(options, 'out');
+        const opened = service.open(file);
+        try {
+            const report = service.render(opened.handle, { format: 'svg' });
+            let pages = report.pages;
+            if (out !== undefined) {
+                mkdirSync(out, { recursive: true });
+                pages = pages.map((page) => {
+                    const target = path.join(out, `slide-${page.index + 1}.svg`);
+                    writeFileSync(target, page.svg, 'utf8');
+                    return { ...page, path: target, bytes: Buffer.byteLength(page.svg) };
+                });
+            }
+            const lines = [`render revision=${report.revision} format=svg pages=${pages.length}`];
+            for (const page of pages) {
+                lines.push(`  [${page.index}] ${page.widthPx}x${page.heightPx}px ${page.path ?? page.slideId}`);
+            }
+            for (const loss of report.losses) {
+                lines.push(`  ${loss.code} ${loss.slideId ?? '-'} ${loss.message}`);
+            }
+            ctx.emitResult({ ...report, pages }, lines.join('\n'));
+        } finally {
+            service.close(opened.handle);
+        }
+        return 0;
+    });
+
+cli
+    .command('export', 'cli.cmd.export')
+    .option('--format <format>', 'cli.opt.exportFormat', { enum: ['pptx', 'ppsx', 'potx'] })
+    .option('--out <file>', 'cli.opt.exportOut')
+    .option('--overwrite', 'cli.opt.overwrite')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-ppt.cli.file-required', { message: 'a project file is required' });
+            return 2;
+        }
+        const target = text(options, 'out');
+        if (target === undefined) {
+            ctx.fail('open-ppt.cli.out-required', { message: '`--out <file>` is required' });
+            return 2;
+        }
+        const requested = text(options, 'format') ?? 'pptx';
+        if (requested !== 'pptx' && requested !== 'ppsx' && requested !== 'potx') {
+            ctx.fail('open-ppt.cli.format-unsupported', { message: `\`${requested}\` is not a supported export target` });
+            return 2;
+        }
+        const format: ExportFormat = requested === 'ppsx' ? 'ppsx' : requested === 'potx' ? 'potx' : 'pptx';
+        const opened = service.open(file);
+        try {
+            const report = service.exportDeck(opened.handle, {
+                format,
+                target,
+                overwrite: flag(options, 'overwrite'),
+            });
+            const lines = [`export ${target} revision=${report.revision} format=${report.format} bytes=${report.bytes}`];
+            for (const loss of report.losses) {
+                lines.push(`  ${loss.code} ${loss.slideId ?? '-'} ${loss.message}`);
+            }
+            ctx.emitResult(report, lines.join('\n'));
         } finally {
             service.close(opened.handle);
         }

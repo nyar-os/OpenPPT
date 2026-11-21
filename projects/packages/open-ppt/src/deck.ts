@@ -7,8 +7,8 @@
  * call leaves no half page behind.
  */
 
-import { readFileSync } from 'node:fs';
-import { basename, extname } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, extname, join } from 'node:path';
 
 import { NotImplementedError, OpenPPTError } from './errors.js';
 import type { DeckIntent, PresentationFormat } from './formats.js';
@@ -229,10 +229,31 @@ export class Deck {
         return service.inspect(this.state.handle, options?.checks);
     }
 
-    /** Renders pages to `svg`, `png` or `pdf`. */
-    async render(_options: RenderOptions): Promise<RenderReport> {
+    /** Renders pages to `svg`; `png` and `pdf` need a raster backend this build does not ship. */
+    async render(options: RenderOptions): Promise<RenderReport> {
         this.assertOpen('deck.render');
-        throw new NotImplementedError('deck.render');
+        if (options.format !== 'svg') {
+            throw new NotImplementedError(`deck.render.${options.format}`);
+        }
+        if (options.scale !== undefined && options.scale !== 1) {
+            throw new NotImplementedError('deck.render.scale');
+        }
+        const report = service.render(this.state.handle, { format: 'svg' });
+        let pages = report.pages;
+        if (options.pages !== undefined && options.pages !== 'all') {
+            const wanted = new Set(options.pages);
+            pages = pages.filter((page) => wanted.has(page.index));
+        }
+        const directory = options.target;
+        if (directory !== undefined && directory.length > 0) {
+            mkdirSync(directory, { recursive: true });
+            pages = pages.map((page) => {
+                const path = join(directory, `slide-${page.index + 1}.svg`);
+                writeFileSync(path, page.svg, 'utf8');
+                return { ...page, path, bytes: Buffer.byteLength(page.svg) };
+            });
+        }
+        return { ...report, pages };
     }
 
     /** Renders a whole-deck overview for visual review. */
@@ -241,10 +262,25 @@ export class Deck {
         throw new NotImplementedError('deck.contactSheet');
     }
 
-    /** Writes a projection (`pptx`, `ppsx`, `potx`, `pdf`, `odp`) and reports losses. */
-    async export(_options: ExportOptions): Promise<ExportReport> {
+    /** Writes a projection (`pptx`, `ppsx`, `potx`) and reports what it dropped. */
+    async export(options: ExportOptions): Promise<ExportReport> {
         this.assertOpen('deck.export');
-        throw new NotImplementedError('deck.export');
+        if (options.format !== 'pptx' && options.format !== 'ppsx' && options.format !== 'potx') {
+            throw new NotImplementedError(`deck.export.${options.format}`);
+        }
+        const target = options.target;
+        if (target === undefined || target.trim().length === 0) {
+            throw new OpenPPTError('session/argument-invalid', '`deck.export()` needs a target file');
+        }
+        if (options.lossPolicy !== undefined && options.lossPolicy !== 'warn' && options.lossPolicy !== 'error') {
+            throw new OpenPPTError('session/argument-invalid', '`lossPolicy` must be `warn` or `error`');
+        }
+        return service.exportDeck(this.state.handle, {
+            format: options.format,
+            target,
+            overwrite: options.overwrite ?? false,
+            lossPolicy: options.lossPolicy,
+        });
     }
 
     /** Saves the native editable project (not an exchange format). */

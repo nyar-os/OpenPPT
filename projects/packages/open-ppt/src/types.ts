@@ -120,6 +120,8 @@ export interface OpenPPTCapabilities {
     readonly checks: Readonly<Record<InspectCheck, SupportLevel>>;
     readonly renderers: Readonly<Record<RenderFormat, SupportLevel>>;
     readonly exportTargets: Readonly<Record<ExportFormat, SupportLevel>>;
+    /** Loss codes a partial export target may report, keyed like `exportTargets`. */
+    readonly exportLossCodes?: Readonly<Partial<Record<ExportFormat, readonly string[]>>>;
     readonly playback: PlaybackCapability;
 }
 
@@ -504,6 +506,7 @@ export interface InspectReport {
 /** Options of `deck.render()`. */
 export interface RenderOptions {
     readonly format: RenderFormat;
+    /** Zero-based slide indexes to keep, or `'all'`. */
     readonly pages?: 'all' | readonly number[];
     readonly target?: string;
     readonly scale?: number;
@@ -511,10 +514,23 @@ export interface RenderOptions {
 
 /** One rendered page. */
 export interface RenderPage {
+    /** Zero-based slide index. */
     readonly index: number;
     readonly slideId: SlideId;
+    readonly widthPx: number;
+    readonly heightPx: number;
+    /** Standalone SVG document; present for the `svg` renderer. */
+    readonly svg: string;
     readonly path?: string;
     readonly bytes?: number;
+}
+
+/** One construct the renderer could not paint. */
+export interface RenderLoss {
+    readonly code: string;
+    readonly slideId?: SlideId;
+    readonly elementId?: ElementId;
+    readonly message: string;
 }
 
 /** Result of `deck.render()`. */
@@ -522,6 +538,7 @@ export interface RenderReport {
     readonly revision: number;
     readonly format: RenderFormat;
     readonly pages: readonly RenderPage[];
+    readonly losses: readonly RenderLoss[];
     readonly diagnostics: readonly DeckDiagnostic[];
 }
 
@@ -564,6 +581,8 @@ export interface ExportReport {
     readonly revision: number;
     readonly format: ExportFormat;
     readonly target: string;
+    /** Size of the written package, in bytes. */
+    readonly bytes: number;
     readonly losses: readonly ExportLoss[];
     readonly diagnostics: readonly DeckDiagnostic[];
     /** False for projections such as PDF that cannot be reopened for editing. */
