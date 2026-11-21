@@ -559,12 +559,7 @@ fn png_object(pdf: &mut Pdf, raster: &PngRaster) -> usize {
         object
     });
 
-    let space = if raster.gray {
-        "/DeviceGray"
-    }
-    else {
-        "/DeviceRGB"
-    };
+    let space = if raster.gray { "/DeviceGray" } else { "/DeviceRGB" };
     let mut dictionary = format!(
         "/Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace {space} /BitsPerComponent 8 /Filter /FlateDecode",
         raster.width, raster.height
@@ -661,12 +656,8 @@ fn decode_png(bytes: &[u8]) -> Result<PngRaster, String> {
         4 => 2,
         _ => 4,
     };
-    let stride = (width as usize)
-        .checked_mul(channels)
-        .ok_or_else(|| "PNG raster width overflows".to_string())?;
-    let expected = (stride + 1)
-        .checked_mul(height as usize)
-        .ok_or_else(|| "PNG raster size overflows".to_string())?;
+    let stride = (width as usize).checked_mul(channels).ok_or_else(|| "PNG raster width overflows".to_string())?;
+    let expected = (stride + 1).checked_mul(height as usize).ok_or_else(|| "PNG raster size overflows".to_string())?;
     if expected as u64 > PNG_MAX_SAMPLES {
         return Err("PNG raster is larger than this writer decodes".to_string());
     }
@@ -702,13 +693,7 @@ fn decode_png(bytes: &[u8]) -> Result<PngRaster, String> {
                 transparent |= value != 0xFF;
                 alpha.push(value);
             }
-            PngRaster {
-                width,
-                height,
-                gray: false,
-                samples,
-                alpha: transparent.then_some(alpha),
-            }
+            PngRaster { width, height, gray: false, samples, alpha: transparent.then_some(alpha) }
         }
         4 => {
             let mut samples = Vec::with_capacity(rows.len() / 2);
@@ -777,11 +762,8 @@ fn unfilter(data: &[u8], stride: usize, height: usize, bytes_per_pixel: usize) -
 /// PNG Paeth predictor, choosing the neighbouring byte closest to `left + up - upper_left`.
 fn paeth(left: u8, up: u8, upper_left: u8) -> u8 {
     let estimate = left as i16 + up as i16 - upper_left as i16;
-    let (left_distance, up_distance, corner_distance) = (
-        (estimate - left as i16).abs(),
-        (estimate - up as i16).abs(),
-        (estimate - upper_left as i16).abs(),
-    );
+    let (left_distance, up_distance, corner_distance) =
+        ((estimate - left as i16).abs(), (estimate - up as i16).abs(), (estimate - upper_left as i16).abs());
     if left_distance <= up_distance && left_distance <= corner_distance {
         left
     }

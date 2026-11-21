@@ -26,16 +26,61 @@ pub fn edit(deck: &mut Deck, request: &Value) -> Result<Value, ServiceError> {
     if operations.is_empty() {
         return Err(ServiceError::new("session/argument-invalid", "an edit script needs at least one operation"));
     }
-    let (results, resolved) = deck
+    let (results, resolved, deferred) = deck
         .transaction(expected, |draft| {
-            let mut state = EditState { resolved: HashMap::new(), results: Vec::new() };
+            let mut state = EditState { resolved: HashMap::new(), results: Vec::new(), deferred: Vec::new() };
             for operation in operations {
                 state.apply(draft, operation)?;
             }
-            Ok((state.results, state.resolved))
+            Ok((state.results, state.resolved, state.deferred))
         })
         .map_err(ServiceError::from)?;
+    apply_deferred(deck, deferred)?;
     Ok(json!({ "deck": summary(deck), "revision": deck.revision(), "results": results, "resolved": resolved }))
+}
+
+/// One edit the upstream draft API has no setter for.
+///
+/// The draft is validated while the transaction runs; the document is then
+/// cloned, changed and rebuilt so a failure in the closure still consumes no
+/// revision.
+enum Deferred {
+    Reorder { slide: SlideId, element: ElementId, index: usize },
+    Background { slide: SlideId, fill: Option<Fill> },
+}
+
+/// Applies deferred edits to the committed document and rebuilds the deck.
+///
+/// `Deck::from_document` starts a fresh history, so the revision the transaction
+/// already committed is kept as is: one edit script is still one bump.
+fn apply_deferred(deck: &mut Deck, deferred: Vec<Deferred>) -> Result<(), ServiceError> {
+    if deferred.is_empty() {
+        return Ok(());
+    }
+    let mut document = deck.document().clone();
+    for operation in deferred {
+        match operation {
+            Deferred::Reorder { slide, element, index } => {
+                let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide)
+                else {
+                    continue;
+                };
+                let Some(position) = model.elements.iter().position(|candidate| candidate.id == element)
+                else {
+                    continue;
+                };
+                let moved = model.elements.remove(position);
+                model.elements.insert(index.min(model.elements.len()), moved);
+            }
+            Deferred::Background { slide, fill } => {
+                if let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide) {
+                    model.background = fill;
+                }
+            }
+        }
+    }
+    *deck = Deck::from_document(document).map_err(ServiceError::from)?;
+    Ok(())
 }
 
 /// Returns one slide with its elements in authoring units.
@@ -198,6 +243,7 @@ pub fn redo(deck: &mut Deck) -> Value {
 struct EditState {
     resolved: HashMap<String, String>,
     results: Vec<Option<String>>,
+    deferred: Vec<Deferred>,
 }
 
 impl EditState {
@@ -239,6 +285,17 @@ impl EditState {
                     .and_then(Value::as_bool)
                     .ok_or_else(|| invalid("`slide.setHidden` needs a boolean `hidden`"))?;
                 draft.set_slide_hidden(&slide, hidden)?;
+                None
+            }
+            "slide.setBackground" => {
+                let slide = self.slide(operation)?;
+                let fill = background_fill(required(operation, "fill")?)?;
+                if draft.document().slide(&slide).is_none() {
+                    return Err(
+                        DeckError::new(codes::OBJECT_NOT_FOUND, format!("slide `{slide}` does not exist")).with_slide(slide)
+                    );
+                }
+                self.deferred.push(Deferred::Background { slide, fill });
                 None
             }
             "text.add" => {
@@ -359,6 +416,27 @@ impl EditState {
                 draft.lock_element(&slide, &element, lock_flags(operation.get("flags"))?)?;
                 None
             }
+            "element.reorder" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let model = draft.document().slide(&slide).ok_or_else(|| {
+                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("slide `{slide}` does not exist")).with_slide(slide.clone())
+                })?;
+                if model.element(&element).is_none() {
+                    return Err(DeckError::new(
+                        codes::OBJECT_NOT_FOUND,
+                        format!("element `{element}` does not exist on this slide"),
+                    )
+                    .with_slide(slide)
+                    .with_element(element));
+                }
+                let index = required_usize(operation, "index")?;
+                if index >= model.elements.len() {
+                    return Err(invalid(format!("`index` must be below {} for this slide", model.elements.len())));
+                }
+                self.deferred.push(Deferred::Reorder { slide, element, index });
+                None
+            }
             "element.remove" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
@@ -465,6 +543,34 @@ fn optional_usize(operation: &Value, key: &str) -> Result<Option<usize>, DeckErr
             .map(Some)
             .ok_or_else(|| invalid(format!("`{key}` must be a non-negative integer"))),
     }
+}
+
+fn required_usize(operation: &Value, key: &str) -> Result<usize, DeckError> {
+    required(operation, key)?
+        .as_u64()
+        .and_then(|number| usize::try_from(number).ok())
+        .ok_or_else(|| invalid(format!("`{key}` must be a non-negative integer")))
+}
+
+/// Parses `null` or `{ "kind": "solid", "color": "#RRGGBB" }`.
+fn background_fill(value: &Value) -> Result<Option<Fill>, DeckError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let kind = value.get("kind").and_then(Value::as_str).ok_or_else(|| invalid("`fill.kind` must be `solid`"))?;
+    if kind != "solid" {
+        return Err(invalid(format!("`fill.kind` must be `solid`, not `{kind}`")));
+    }
+    let color = value.get("color").and_then(Value::as_str).ok_or_else(|| invalid("a solid background needs a `color`"))?;
+    let trimmed = color.trim().trim_start_matches('#');
+    let expanded = match trimmed.len() {
+        3 if trimmed.chars().all(|character| character.is_ascii_hexdigit()) => {
+            trimmed.chars().flat_map(|character| [character, character]).collect::<String>()
+        }
+        6 if trimmed.chars().all(|character| character.is_ascii_hexdigit()) => trimmed.to_string(),
+        _ => return Err(invalid("background `color` must be a 3- or 6-digit hex colour")),
+    };
+    Ok(Some(Fill::Solid { color: format!("#{}", expanded.to_ascii_uppercase()) }))
 }
 
 fn array<'a>(operation: &'a Value, key: &str) -> Result<&'a Vec<Value>, DeckError> {
@@ -630,5 +736,228 @@ fn element_text(element: &document_presentation::authored::Element) -> Option<St
     match &element.content {
         document_presentation::authored::ElementContent::Text(text) => Some(text.text()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use document_presentation::authored::{
+        DeckCreateOptions, ShapeElementInput, SlideAddOptions, TextContent, TextElementInput, Transform,
+    };
+
+    use super::*;
+
+    fn two_shapes() -> (Deck, String, String, String) {
+        let mut deck = Deck::create(DeckCreateOptions::default());
+        let mut ids = (String::new(), String::new());
+        let slide = deck
+            .transaction(None, |edit| {
+                let slide = edit.add_slide(SlideAddOptions { layout: None, index: None })?;
+                let first = edit.add_shape(
+                    &slide,
+                    ShapeElementInput {
+                        geometry: "rect".to_string(),
+                        transform: Some(Transform::from_points(10.0, 10.0, 50.0, 50.0).unwrap()),
+                        fill: Some(Fill::Solid { color: "#FF0000".to_string() }),
+                        line: None,
+                        alt: None,
+                    },
+                )?;
+                let second = edit.add_shape(
+                    &slide,
+                    ShapeElementInput {
+                        geometry: "rect".to_string(),
+                        transform: Some(Transform::from_points(20.0, 20.0, 50.0, 50.0).unwrap()),
+                        fill: Some(Fill::Solid { color: "#00FF00".to_string() }),
+                        line: None,
+                        alt: None,
+                    },
+                )?;
+                ids = (first.as_str().to_string(), second.as_str().to_string());
+                Ok(slide)
+            })
+            .expect("shape deck builds");
+        (deck, slide.as_str().to_string(), ids.0, ids.1)
+    }
+
+    fn background_deck() -> (Deck, String) {
+        let mut deck = Deck::create(DeckCreateOptions::default());
+        let slide = deck
+            .transaction(None, |edit| {
+                let slide = edit.add_slide(SlideAddOptions { layout: None, index: None })?;
+                edit.add_text(
+                    &slide,
+                    TextElementInput {
+                        text: TextContent::plain("Background"),
+                        transform: Some(Transform::from_points(40.0, 40.0, 400.0, 100.0).unwrap()),
+                        alt: None,
+                        placeholder: None,
+                    },
+                )?;
+                Ok(slide)
+            })
+            .expect("text deck builds");
+        (deck, slide.as_str().to_string())
+    }
+
+    fn svg(deck: &Deck) -> String {
+        let report = crate::render::render(deck).expect("render succeeds");
+        report["pages"][0]["svg"].as_str().expect("svg page").to_string()
+    }
+
+    #[test]
+    fn element_reorder_changes_the_paint_order() {
+        let (mut deck, slide, first, second) = two_shapes();
+        let before = svg(&deck);
+        assert!(
+            before.find("fill=\"#FF0000\"").unwrap() < before.find("fill=\"#00FF00\"").unwrap(),
+            "the first element paints first: {before}"
+        );
+
+        let revision = deck.revision();
+        let report = edit(
+            &mut deck,
+            &json!({
+                "operations": [{ "op": "element.reorder", "slideId": slide, "elementId": second, "index": 0 }],
+            }),
+        )
+        .expect("reorder commits");
+
+        assert_eq!(report["revision"], revision + 1, "one script is one revision bump");
+        let after = svg(&deck);
+        assert!(
+            after.find("fill=\"#00FF00\"").unwrap() < after.find("fill=\"#FF0000\"").unwrap(),
+            "the moved element paints first: {after}"
+        );
+
+        let detail = slide_detail(&deck, &slide).expect("slide exists");
+        assert_eq!(detail["elements"][0]["id"], second);
+        assert_eq!(detail["elements"][1]["id"], first);
+    }
+
+    #[test]
+    fn slide_background_edit_reaches_render_and_exports() {
+        let (mut deck, slide) = background_deck();
+        let revision = deck.revision();
+        let report = edit(
+            &mut deck,
+            &json!({
+                "operations": [{
+                    "op": "slide.setBackground",
+                    "slideId": slide,
+                    "fill": { "kind": "solid", "color": "112233" },
+                }],
+            }),
+        )
+        .expect("background commits");
+
+        assert_eq!(report["revision"], revision + 1);
+        assert_eq!(slide_detail(&deck, &slide).expect("slide")["background"], "#112233");
+        assert!(svg(&deck).contains("fill=\"#112233\""), "SVG paints the new background");
+
+        let directory = std::env::temp_dir().join("open-ppt-background-edit");
+        std::fs::create_dir_all(&directory).expect("temp directory");
+        let pdf = directory.join("background.pdf");
+        crate::export::export(&deck, &json!({ "format": "pdf", "target": pdf.display().to_string(), "overwrite": true }))
+            .expect("pdf export");
+        let pdf_text = String::from_utf8_lossy(&std::fs::read(&pdf).expect("pdf bytes")).to_string();
+        assert!(pdf_text.contains("0.07 0.13 0.2 rg"), "PDF paints the new background: {pdf_text}");
+
+        let pptx = directory.join("background.pptx");
+        crate::export::export(&deck, &json!({ "format": "pptx", "target": pptx.display().to_string(), "overwrite": true }))
+            .expect("pptx export");
+        let pptx_text = String::from_utf8_lossy(&std::fs::read(&pptx).expect("pptx bytes")).to_string();
+        assert!(pptx_text.contains("112233"), "PPTX writes the new background");
+    }
+
+    #[test]
+    fn clearing_a_slide_background_restores_the_default() {
+        let (mut deck, slide) = background_deck();
+        edit(
+            &mut deck,
+            &json!({
+                "operations": [{
+                    "op": "slide.setBackground",
+                    "slideId": slide,
+                    "fill": { "kind": "solid", "color": "#ABCDEF" },
+                }],
+            }),
+        )
+        .expect("background commits");
+        assert!(svg(&deck).contains("fill=\"#ABCDEF\""));
+
+        let revision = deck.revision();
+        let report =
+            edit(&mut deck, &json!({ "operations": [{ "op": "slide.setBackground", "slideId": slide, "fill": null }] }))
+                .expect("background clears");
+
+        assert_eq!(report["revision"], revision + 1, "clearing is a commit too");
+        assert!(slide_detail(&deck, &slide).expect("slide")["background"].is_null());
+        let cleared = svg(&deck);
+        assert!(!cleared.contains("#ABCDEF"), "the old background is gone");
+        assert!(cleared.contains("fill=\"#FFFFFF\""), "the default background takes over");
+    }
+
+    #[test]
+    fn invalid_reorder_and_background_arguments_do_not_commit() {
+        let (mut deck, slide, _, second) = two_shapes();
+        let revision = deck.revision();
+
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [{ "op": "element.reorder", "slideId": slide, "elementId": "element-missing", "index": 0 }],
+            }),
+        )
+        .expect_err("an unknown element is refused");
+        assert_eq!(error.code, "object/not-found");
+
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [{ "op": "element.reorder", "slideId": slide, "elementId": second, "index": 9 }],
+            }),
+        )
+        .expect_err("an out-of-range index is refused");
+        assert_eq!(error.code, "session/argument-invalid");
+
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [{
+                    "op": "slide.setBackground",
+                    "slideId": slide,
+                    "fill": { "kind": "gradient", "color": "#000000" },
+                }],
+            }),
+        )
+        .expect_err("an unknown fill kind is refused");
+        assert_eq!(error.code, "session/argument-invalid");
+
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [{
+                    "op": "slide.setBackground",
+                    "slideId": slide,
+                    "fill": { "kind": "solid", "color": "pink" },
+                }],
+            }),
+        )
+        .expect_err("an unusable colour is refused");
+        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(deck.revision(), revision, "failed scripts consume no revision");
+
+        let report = edit(
+            &mut deck,
+            &json!({
+                "operations": [
+                    { "op": "element.reorder", "slideId": slide, "elementId": second, "index": 0 },
+                    { "op": "slide.setBackground", "slideId": slide, "fill": { "kind": "solid", "color": "#102030" } },
+                ],
+            }),
+        )
+        .expect("deferred operations commit together");
+        assert_eq!(report["revision"], revision + 1, "two deferred operations still bump once");
     }
 }
