@@ -2,8 +2,9 @@
 //!
 //! The writer emits one minimal but openable OPC package: presentation, one
 //! slide master, one blank layout, one theme, the document properties and one
-//! slide part per deck slide. Text, preset shapes and pictures are carried;
-//! tables, charts, formulas and media are skipped and reported as loss codes.
+//! slide part per deck slide. Text, preset shapes, pictures and tables are
+//! carried; charts, formulas, media and groups are skipped and reported as loss
+//! codes.
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -11,13 +12,13 @@ use std::{
 };
 
 use data_binary_zip::{ZipEntry, ZipWriter};
-use document_presentation::authored::{Deck, DeckSlide, Element, ElementContent, Fill, Line, Transform};
+use document_presentation::authored::{
+    Deck, DeckSlide, Element, ElementContent, Fill, Line, PlaceholderRef, TableContent, TextParagraph, Transform,
+};
 use serde_json::{Value, json};
 
 use crate::ServiceError;
 
-/// Loss reported when a table is skipped.
-pub const LOSS_TABLE: &str = "table";
 /// Loss reported when a chart is skipped.
 pub const LOSS_CHART: &str = "chart";
 /// Loss reported when a formula is skipped.
@@ -190,13 +191,9 @@ fn build(deck: &Deck, format: Format) -> Result<(Vec<u8>, Vec<Value>), ServiceEr
                     write_picture(&mut body, next_id, element, &relationship);
                     next_id += 1;
                 }
-                ElementContent::Table(_) => {
-                    losses.push(loss(
-                        slide,
-                        element,
-                        LOSS_TABLE,
-                        "tables are editable but are not written into this package yet",
-                    ));
+                ElementContent::Table(table) => {
+                    write_table(&mut body, next_id, element, table);
+                    next_id += 1;
                 }
                 ElementContent::Chart(_) => {
                     losses.push(loss(
@@ -295,33 +292,39 @@ fn background_xml(slide: &DeckSlide) -> String {
 fn write_text_shape(out: &mut String, shape_id: u32, element: &Element, text: &document_presentation::authored::TextContent) {
     out.push_str("<p:sp><p:nvSpPr>");
     write_non_visual(out, shape_id, "Text", element.alt.as_deref());
-    out.push_str("<p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr><p:spPr>");
+    out.push_str("<p:cNvSpPr txBox=\"1\"/><p:nvPr>");
+    write_placeholder(out, element.placeholder.as_ref());
+    out.push_str("</p:nvPr></p:nvSpPr><p:spPr>");
     write_xfrm(out, element.transform);
     out.push_str("<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>");
     out.push_str(&fill_xml(element.style.fill.as_ref()));
     out.push_str(&line_xml(element.style.line.as_ref()));
     out.push_str("</p:spPr><p:txBody><a:bodyPr wrap=\"square\" anchor=\"t\"/><a:lstStyle/>");
     for paragraph in &text.paragraphs {
-        out.push_str("<a:p>");
-        let mut attributes = String::new();
-        if paragraph.level > 0 {
-            attributes.push_str(&format!(" lvl=\"{}\"", paragraph.level.min(8)));
-        }
-        if let Some(align) = paragraph.align {
-            attributes.push_str(&format!(" algn=\"{}\"", align_value(align)));
-        }
-        if attributes.is_empty() {
-            out.push_str("<a:pPr/>");
-        }
-        else {
-            out.push_str(&format!("<a:pPr{attributes}/>"));
-        }
-        for run in &paragraph.runs {
-            write_run(out, run);
-        }
-        out.push_str("<a:endParaRPr lang=\"en-US\"/></a:p>");
+        write_paragraph(out, paragraph);
     }
     out.push_str("</p:txBody></p:sp>");
+}
+
+fn write_paragraph(out: &mut String, paragraph: &TextParagraph) {
+    out.push_str("<a:p>");
+    let mut attributes = String::new();
+    if paragraph.level > 0 {
+        attributes.push_str(&format!(" lvl=\"{}\"", paragraph.level.min(8)));
+    }
+    if let Some(align) = paragraph.align {
+        attributes.push_str(&format!(" algn=\"{}\"", align_value(align)));
+    }
+    if attributes.is_empty() {
+        out.push_str("<a:pPr/>");
+    }
+    else {
+        out.push_str(&format!("<a:pPr{attributes}/>"));
+    }
+    for run in &paragraph.runs {
+        write_run(out, run);
+    }
+    out.push_str("<a:endParaRPr lang=\"en-US\"/></a:p>");
 }
 
 fn write_shape(out: &mut String, shape_id: u32, element: &Element, geometry: &str, fill: Option<&Fill>, line: Option<&Line>) {
@@ -348,6 +351,69 @@ fn write_picture(out: &mut String, shape_id: u32, element: &Element, relationshi
     out.push_str("<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr></p:pic>");
 }
 
+fn write_table(out: &mut String, shape_id: u32, element: &Element, table: &TableContent) {
+    out.push_str("<p:graphicFrame><p:nvGraphicFramePr>");
+    write_non_visual(out, shape_id, "Table", element.alt.as_deref());
+    out.push_str("<p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>");
+    write_transform(out, element.transform, "p:xfrm");
+    out.push_str(
+        "<a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/table\"><a:tbl><a:tblPr firstRow=\"1\" bandRow=\"1\"/><a:tblGrid>",
+    );
+    let columns = table.column_widths_emu.len().max(1);
+    let fallback = (element.transform.width_emu / columns as i64).max(1);
+    if table.column_widths_emu.is_empty() {
+        out.push_str(&format!("<a:gridCol w=\"{fallback}\"/>"));
+    }
+    else {
+        for width in &table.column_widths_emu {
+            out.push_str(&format!("<a:gridCol w=\"{}\"/>", (*width).max(1)));
+        }
+    }
+    out.push_str("</a:tblGrid>");
+    for row in &table.rows {
+        out.push_str(&format!("<a:tr h=\"{}\">", row.height_emu.max(1)));
+        for cell in &row.cells {
+            out.push_str("<a:tc");
+            if cell.column_span > 1 {
+                out.push_str(&format!(" gridSpan=\"{}\"", cell.column_span));
+            }
+            if cell.row_span > 1 {
+                out.push_str(&format!(" rowSpan=\"{}\"", cell.row_span));
+            }
+            out.push_str("><a:txBody><a:bodyPr/><a:lstStyle/>");
+            for paragraph in &cell.text.paragraphs {
+                write_paragraph(out, paragraph);
+            }
+            if cell.text.paragraphs.is_empty() {
+                out.push_str("<a:p><a:endParaRPr lang=\"en-US\"/></a:p>");
+            }
+            out.push_str("</a:txBody><a:tcPr>");
+            out.push_str(&fill_xml(cell.fill.as_ref()));
+            out.push_str("</a:tcPr></a:tc>");
+        }
+        out.push_str("</a:tr>");
+    }
+    out.push_str("</a:tbl></a:graphicData></a:graphic></p:graphicFrame>");
+}
+
+fn write_placeholder(out: &mut String, placeholder: Option<&PlaceholderRef>) {
+    let Some(placeholder) = placeholder
+    else {
+        return;
+    };
+    let kind = match placeholder.name.as_str() {
+        "title" => "title",
+        "ctrTitle" => "ctrTitle",
+        "subTitle" => "subTitle",
+        "body" => "body",
+        "dt" => "dt",
+        "ftr" => "ftr",
+        "sldNum" => "sldNum",
+        _ => return,
+    };
+    out.push_str(&format!("<p:ph type=\"{kind}\"/>"));
+}
+
 fn write_non_visual(out: &mut String, shape_id: u32, kind: &str, alt: Option<&str>) {
     out.push_str(&format!("<p:cNvPr id=\"{shape_id}\" name=\"{kind} {shape_id}\""));
     if let Some(alt) = alt.filter(|value| !value.is_empty()) {
@@ -357,7 +423,11 @@ fn write_non_visual(out: &mut String, shape_id: u32, kind: &str, alt: Option<&st
 }
 
 fn write_xfrm(out: &mut String, transform: Transform) {
-    out.push_str("<a:xfrm");
+    write_transform(out, transform, "a:xfrm");
+}
+
+fn write_transform(out: &mut String, transform: Transform, tag: &str) {
+    out.push_str(&format!("<{tag}"));
     if let Some(rotation) = transform.rotation_deg
         && rotation.abs() > f64::EPSILON
     {
@@ -371,7 +441,7 @@ fn write_xfrm(out: &mut String, transform: Transform) {
         transform.width_emu.max(0),
         transform.height_emu.max(0)
     ));
-    out.push_str("</a:xfrm>");
+    out.push_str(&format!("</{tag}>"));
 }
 
 fn write_run(out: &mut String, run: &document_presentation::authored::TextRun) {
@@ -691,11 +761,11 @@ mod tests {
     }
 
     #[test]
-    fn pptx_round_trips_slides_and_text() {
+    fn pptx_round_trips_slides_text_and_tables() {
         let deck = sample_deck();
         let (bytes, losses) = build(&deck, Format::Pptx).expect("package builds");
         assert!(bytes.starts_with(b"PK\x03\x04"), "writer must emit a ZIP container");
-        assert!(losses.iter().any(|loss| loss["code"] == LOSS_TABLE));
+        assert!(!losses.iter().any(|loss| loss["code"] == "table"), "tables are written, not dropped");
         assert!(losses.iter().any(|loss| loss["code"] == LOSS_CHART));
 
         let imported = import_pptx_bytes("round-trip.pptx", &bytes).expect("the written package imports");
@@ -710,8 +780,60 @@ mod tests {
         assert!(text.iter().any(|value| value.contains("Hello <OpenPPT>")), "slide text must survive the round trip: {text:?}");
         assert!(text.iter().any(|value| value.contains("Quarterly review")), "title text must survive the round trip");
 
+        let table = imported.slides[0].shapes.iter().find_map(|shape| shape.table.as_ref()).expect("the table part is written");
+        assert_eq!(table.column_widths.len(), 2);
+        assert_eq!(table.rows.len(), 2);
+        assert_eq!(table.rows[0].height, points_to_emu(24.0).unwrap());
+        let cells: Vec<String> = table.rows.iter().flat_map(|row| row.cells.iter()).map(|cell| cell.text.text()).collect();
+        assert_eq!(cells, vec!["A", "B", "1", "2"]);
+
         let render = render_presentation(&imported, &RenderOptions::default());
         assert_eq!(render.views.len(), deck.slides().len());
+    }
+
+    #[test]
+    fn table_cell_fills_and_spans_are_written() {
+        let mut deck = Deck::create(DeckCreateOptions::default());
+        deck.transaction(None, |edit| {
+            let slide = edit.add_slide(SlideAddOptions { layout: None, index: None })?;
+            edit.add_table(
+                &slide,
+                TableElementInput {
+                    column_widths_emu: vec![points_to_emu(80.0).unwrap(), points_to_emu(120.0).unwrap()],
+                    rows: vec![TableRow {
+                        height_emu: points_to_emu(30.0).unwrap(),
+                        cells: vec![
+                            TableCell {
+                                text: TextContent::plain("Header"),
+                                fill: Some(Fill::Solid { color: "#112233".to_string() }),
+                                column_span: 1,
+                                row_span: 1,
+                            },
+                            TableCell::plain("Value"),
+                        ],
+                    }],
+                    transform: Some(Transform::from_points(40.0, 40.0, 200.0, 30.0).unwrap()),
+                    alt: Some("Grid".to_string()),
+                },
+            )?;
+            Ok(())
+        })
+        .expect("table deck builds");
+
+        let (bytes, losses) = build(&deck, Format::Pptx).expect("package builds");
+        assert!(losses.is_empty(), "a table-only deck loses nothing: {losses:?}");
+        let xml = String::from_utf8_lossy(&bytes);
+        assert!(xml.contains("<a:tbl>"));
+        assert!(xml.contains("<a:gridCol w=\"1016000\"/>"));
+        assert!(xml.contains("<a:tr h=\"381000\">"));
+        assert!(xml.contains("<a:srgbClr val=\"112233\"/>"));
+
+        let imported = import_pptx_bytes("table.pptx", &bytes).expect("the written package imports");
+        let table = imported.slides[0].shapes.iter().find_map(|shape| shape.table.as_ref()).expect("table survives");
+        assert_eq!(table.column_widths, vec![1_016_000, 1_524_000]);
+        assert_eq!(table.rows[0].cells[0].text.text(), "Header");
+        assert_eq!(table.rows[0].cells[0].fill, Some(document_formats::import::pptx::Fill::Solid("#112233".to_string())));
+        assert_eq!(table.rows[0].cells[1].text.text(), "Value");
     }
 
     #[test]

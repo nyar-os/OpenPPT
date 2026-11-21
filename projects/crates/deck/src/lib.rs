@@ -2,8 +2,8 @@
 //!
 //! The deck model, transactions, project container, static playback and rule
 //! checks live in the shared upstream tree. This crate only maps arguments,
-//! files and JSON reports so the CLI and the Node-API surface share one path
-//! instead of growing a second deck model.
+//! files, PresentationML export and JSON reports so the CLI and the Node-API
+//! surface share one path instead of growing a second deck model.
 
 #![deny(missing_docs)]
 
@@ -70,10 +70,11 @@ impl From<io::Error> for ServiceError {
 ///
 /// The matrix only claims what is wired: the native project container, editing,
 /// saving, static playback, the implemented rule checks, PresentationML
-/// playback and export, and per-page SVG rendering. PPTX import and export are
-/// `partial` because charts, SmartArt, OLE objects, media, groups and tables are
-/// refused or dropped with stable codes instead of being faked. PNG/PDF
-/// rendering, timed builds, transitions and media playback stay `unsupported`.
+/// playback and export, and per-page SVG rendering. PPTX import is `partial`
+/// because charts, SmartArt, OLE objects, media and groups are refused with
+/// stable codes instead of being faked; PPTX export is `partial` because charts,
+/// formulas, media and groups are skipped and reported. PNG/PDF rendering,
+/// timed builds, transitions and media playback stay `unsupported`.
 pub fn capabilities() -> Value {
     let mut formats = Map::new();
     for format in PRESENTATION_FORMATS {
@@ -113,9 +114,9 @@ pub fn capabilities() -> Value {
         "renderers": { "svg": "supported", "png": "unsupported", "pdf": "unsupported" },
         "exportTargets": { "pptx": "partial", "ppsx": "partial", "potx": "partial", "pdf": "unsupported", "odp": "unsupported" },
         "exportLossCodes": {
-            "pptx": [export::LOSS_TABLE, export::LOSS_CHART, export::LOSS_FORMULA, export::LOSS_MEDIA, export::LOSS_GROUP],
-            "ppsx": [export::LOSS_TABLE, export::LOSS_CHART, export::LOSS_FORMULA, export::LOSS_MEDIA, export::LOSS_GROUP],
-            "potx": [export::LOSS_TABLE, export::LOSS_CHART, export::LOSS_FORMULA, export::LOSS_MEDIA, export::LOSS_GROUP],
+            "pptx": [export::LOSS_CHART, export::LOSS_FORMULA, export::LOSS_MEDIA, export::LOSS_GROUP, export::LOSS_IMAGE],
+            "ppsx": [export::LOSS_CHART, export::LOSS_FORMULA, export::LOSS_MEDIA, export::LOSS_GROUP, export::LOSS_IMAGE],
+            "potx": [export::LOSS_CHART, export::LOSS_FORMULA, export::LOSS_MEDIA, export::LOSS_GROUP, export::LOSS_IMAGE],
             "pdf": [],
             "odp": [],
         },
