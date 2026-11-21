@@ -1,14 +1,17 @@
 //! Minimal PDF 1.7 writer for a static slide projection.
 //!
 //! One slide becomes one page sized from the deck in points. Backgrounds,
-//! preset shapes (rectangles and ellipses), text, tables and JPEG pictures are
-//! painted. Charts, formulas, media and groups are skipped and reported; PNG
-//! and other pictures are reported instead of being decoded into a fabricated
-//! bitmap. Text is written with the three built-in Helvetica faces in WinAnsi,
-//! so characters outside Latin-1 become `?` and are reported as `pdf.glyph`.
+//! preset shapes (rectangles and ellipses), text, tables, JPEG pictures and
+//! PNG pictures are painted. Charts, formulas, media and groups are skipped and
+//! reported; PNG pictures are decoded into an image XObject, with an 8-bit
+//! `/SMask` when the source carries transparency. Other picture encodings are
+//! reported instead of being decoded into a fabricated bitmap. Text is written
+//! with the three built-in Helvetica faces in WinAnsi, so characters outside
+//! Latin-1 become `?` and are reported as `pdf.glyph`.
 
 use std::{collections::HashMap, path::Path};
 
+use data_compression::{CodecLimits, DeflateLevel, Zlib};
 use document_presentation::authored::{
     Deck, DeckSlide, Element, ElementContent, Fill, Line, TableContent, TextAlign, TextParagraph, Transform,
 };
@@ -16,7 +19,7 @@ use serde_json::{Value, json};
 
 use crate::ServiceError;
 
-/// Loss reported when a picture cannot be embedded as a JPEG stream.
+/// Loss reported when a picture cannot be embedded as a JPEG or PNG stream.
 pub(crate) const LOSS_IMAGE: &str = "image";
 /// Loss reported when text contains a character outside WinAnsi/Latin-1.
 pub(crate) const LOSS_GLYPH: &str = "glyph";
@@ -122,12 +125,33 @@ fn build(deck: &Deck) -> Result<(Vec<u8>, Vec<Value>), ServiceError> {
                     };
                     let Some((image_width, image_height, components)) = jpeg_info(&asset.bytes)
                     else {
-                        losses.push(loss(
-                            slide,
-                            element,
-                            LOSS_IMAGE,
-                            "only JPEG pictures are embedded; PNG and other encodings are skipped",
-                        ));
+                        let object = match images.get(image.asset.as_str()) {
+                            Some(object) => *object,
+                            None => match image_object(&mut pdf, &asset.bytes) {
+                                Ok(object) => {
+                                    images.insert(image.asset.as_str().to_string(), object);
+                                    object
+                                }
+                                Err(message) => {
+                                    losses.push(loss(slide, element, LOSS_IMAGE, &message));
+                                    continue;
+                                }
+                            },
+                        };
+                        let name = format!("Im{}", xobjects.len() + 1);
+                        let frame = Frame::from(element.transform);
+                        content.extend_from_slice(
+                            format!(
+                                "q {} 0 0 {} {} {} cm /{} Do Q\n",
+                                num(frame.w),
+                                num(frame.h),
+                                num(frame.x),
+                                num(height - frame.y - frame.h),
+                                name
+                            )
+                            .as_bytes(),
+                        );
+                        xobjects.push((name, object));
                         continue;
                     };
                     let object = match images.get(image.asset.as_str()) {
@@ -493,6 +517,282 @@ fn jpeg_object(bytes: &[u8], width: u32, height: u32, components: u8) -> Vec<u8>
     )
 }
 
+/// PNG file signature; every chunk stream starts with these eight bytes.
+const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+/// Largest picture dimension this writer is willing to decode.
+const PNG_MAX_DIMENSION: u32 = 20_000;
+/// Largest decoded raster this writer is willing to hold in memory.
+const PNG_MAX_SAMPLES: u64 = 256 * 1024 * 1024;
+
+/// One decoded PNG, already reduced to 8-bit gray or RGB samples plus alpha.
+struct PngRaster {
+    width: u32,
+    height: u32,
+    gray: bool,
+    samples: Vec<u8>,
+    alpha: Option<Vec<u8>>,
+}
+
+/// Builds an image XObject for a PNG or JPEG picture, or explains why it cannot.
+fn image_object(pdf: &mut Pdf, bytes: &[u8]) -> Result<usize, String> {
+    if bytes.starts_with(&PNG_SIGNATURE) {
+        let raster = decode_png(bytes)?;
+        return Ok(png_object(pdf, &raster));
+    }
+    Err("only JPEG and PNG pictures are embedded; other encodings are skipped".to_string())
+}
+
+/// Writes the image stream (and its 8-bit `/SMask` when transparent) as objects.
+fn png_object(pdf: &mut Pdf, raster: &PngRaster) -> usize {
+    let mask = raster.alpha.as_ref().map(|alpha| {
+        let object = pdf.reserve();
+        pdf.put(
+            object,
+            stream_object(
+                &format!(
+                    "/Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode",
+                    raster.width, raster.height
+                ),
+                &Zlib::encode(alpha, DeflateLevel::Default),
+            ),
+        );
+        object
+    });
+
+    let space = if raster.gray {
+        "/DeviceGray"
+    }
+    else {
+        "/DeviceRGB"
+    };
+    let mut dictionary = format!(
+        "/Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace {space} /BitsPerComponent 8 /Filter /FlateDecode",
+        raster.width, raster.height
+    );
+    if let Some(mask) = mask {
+        dictionary.push_str(&format!(" /SMask {mask} 0 R"));
+    }
+
+    let object = pdf.reserve();
+    pdf.put(object, stream_object(&dictionary, &Zlib::encode(&raster.samples, DeflateLevel::Default)));
+    object
+}
+
+/// Decodes an 8-bit, non-interlaced PNG into RGB or gray samples.
+fn decode_png(bytes: &[u8]) -> Result<PngRaster, String> {
+    if !bytes.starts_with(&PNG_SIGNATURE) {
+        return Err("the picture is not a PNG stream".to_string());
+    }
+
+    let mut offset = PNG_SIGNATURE.len();
+    let mut header: Option<(u32, u32, u8, u8)> = None;
+    let mut palette: Option<Vec<u8>> = None;
+    let mut transparency: Option<Vec<u8>> = None;
+    let mut data = Vec::new();
+    let mut saw_end = false;
+
+    while offset + 12 <= bytes.len() {
+        let length = u32::from_be_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]]) as usize;
+        let kind = &bytes[offset + 4..offset + 8];
+        let start = offset + 8;
+        let end = start.checked_add(length).ok_or_else(|| "PNG chunk length overflows".to_string())?;
+        let next = end.checked_add(4).ok_or_else(|| "PNG chunk length overflows".to_string())?;
+        if next > bytes.len() {
+            return Err("PNG chunk data is truncated".to_string());
+        }
+        let chunk = &bytes[start..end];
+
+        match kind {
+            b"IHDR" => {
+                if chunk.len() != 13 {
+                    return Err("PNG IHDR must be 13 bytes".to_string());
+                }
+                let width = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                let height = u32::from_be_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+                let bit_depth = chunk[8];
+                let color_type = chunk[9];
+                let compression = chunk[10];
+                let filter = chunk[11];
+                let interlace = chunk[12];
+                if width == 0 || height == 0 || width > PNG_MAX_DIMENSION || height > PNG_MAX_DIMENSION {
+                    return Err("PNG dimensions are outside the supported range".to_string());
+                }
+                if bit_depth != 8 {
+                    return Err(format!("PNG bit depth {bit_depth} is not supported; only 8-bit samples are embedded"));
+                }
+                if !matches!(color_type, 0 | 2 | 3 | 4 | 6) {
+                    return Err(format!("PNG colour type {color_type} is not supported"));
+                }
+                if compression != 0 || filter != 0 {
+                    return Err("PNG compression and filter methods must be standard".to_string());
+                }
+                if interlace != 0 {
+                    return Err("interlaced PNG pictures are not supported".to_string());
+                }
+                header = Some((width, height, bit_depth, color_type));
+            }
+            b"PLTE" => palette = Some(chunk.to_vec()),
+            b"tRNS" => transparency = Some(chunk.to_vec()),
+            b"IDAT" => data.extend_from_slice(chunk),
+            b"IEND" => {
+                saw_end = true;
+                break;
+            }
+            _ => {}
+        }
+        offset = next;
+    }
+
+    let Some((width, height, _, color_type)) = header
+    else {
+        return Err("PNG IHDR is missing".to_string());
+    };
+    if !saw_end {
+        return Err("PNG IEND is missing".to_string());
+    }
+    if data.is_empty() {
+        return Err("PNG image data is missing".to_string());
+    }
+
+    let channels = match color_type {
+        0 => 1usize,
+        2 => 3,
+        3 => 1,
+        4 => 2,
+        _ => 4,
+    };
+    let stride = (width as usize)
+        .checked_mul(channels)
+        .ok_or_else(|| "PNG raster width overflows".to_string())?;
+    let expected = (stride + 1)
+        .checked_mul(height as usize)
+        .ok_or_else(|| "PNG raster size overflows".to_string())?;
+    if expected as u64 > PNG_MAX_SAMPLES {
+        return Err("PNG raster is larger than this writer decodes".to_string());
+    }
+
+    let raw = Zlib::decode(&data, CodecLimits::new().with_max_output_bytes(expected as u64))
+        .map_err(|error| format!("PNG image data could not be inflated: {error}"))?;
+    if raw.value.len() != expected {
+        return Err("PNG image data has the wrong size for its header".to_string());
+    }
+    let rows = unfilter(&raw.value, stride, height as usize, channels)
+        .map_err(|error| format!("PNG image data could not be reconstructed: {error}"))?;
+
+    let raster = match color_type {
+        0 => PngRaster { width, height, gray: true, samples: rows, alpha: None },
+        2 => PngRaster { width, height, gray: false, samples: rows, alpha: None },
+        3 => {
+            let palette = palette.ok_or_else(|| "indexed PNG pictures need a palette".to_string())?;
+            let entries = palette.len() / 3;
+            if entries == 0 {
+                return Err("indexed PNG palette is empty".to_string());
+            }
+            let transparency = transparency.unwrap_or_default();
+            let mut samples = Vec::with_capacity(rows.len() * 3);
+            let mut alpha = Vec::with_capacity(rows.len());
+            let mut transparent = false;
+            for index in rows {
+                let index = index as usize;
+                if index >= entries {
+                    return Err("indexed PNG pixel is outside the palette".to_string());
+                }
+                samples.extend_from_slice(&palette[index * 3..index * 3 + 3]);
+                let value = transparency.get(index).copied().unwrap_or(0xFF);
+                transparent |= value != 0xFF;
+                alpha.push(value);
+            }
+            PngRaster {
+                width,
+                height,
+                gray: false,
+                samples,
+                alpha: transparent.then_some(alpha),
+            }
+        }
+        4 => {
+            let mut samples = Vec::with_capacity(rows.len() / 2);
+            let mut alpha = Vec::with_capacity(rows.len() / 2);
+            let mut transparent = false;
+            for pair in rows.chunks_exact(2) {
+                samples.push(pair[0]);
+                transparent |= pair[1] != 0xFF;
+                alpha.push(pair[1]);
+            }
+            PngRaster { width, height, gray: true, samples, alpha: transparent.then_some(alpha) }
+        }
+        _ => {
+            let mut samples = Vec::with_capacity(rows.len() / 4 * 3);
+            let mut alpha = Vec::with_capacity(rows.len() / 4);
+            let mut transparent = false;
+            for pixel in rows.chunks_exact(4) {
+                samples.extend_from_slice(&pixel[..3]);
+                transparent |= pixel[3] != 0xFF;
+                alpha.push(pixel[3]);
+            }
+            PngRaster { width, height, gray: false, samples, alpha: transparent.then_some(alpha) }
+        }
+    };
+
+    Ok(raster)
+}
+
+/// Reverses PNG row filters 0-4 and returns the concatenated pixel rows.
+fn unfilter(data: &[u8], stride: usize, height: usize, bytes_per_pixel: usize) -> Result<Vec<u8>, String> {
+    let mut out = Vec::with_capacity(stride * height);
+    let mut previous = vec![0u8; stride];
+    let mut offset = 0usize;
+    for _ in 0..height {
+        if offset >= data.len() {
+            return Err("row filter byte is missing".to_string());
+        }
+        let filter = data[offset];
+        offset += 1;
+        if offset + stride > data.len() {
+            return Err("row data is truncated".to_string());
+        }
+        let mut row = data[offset..offset + stride].to_vec();
+        offset += stride;
+
+        for index in 0..stride {
+            let left = if index >= bytes_per_pixel { row[index - bytes_per_pixel] } else { 0 };
+            let up = previous[index];
+            let prediction = match filter {
+                0 => 0,
+                1 => left,
+                2 => up,
+                3 => ((left as u16 + up as u16) / 2) as u8,
+                4 => paeth(left, up, if index >= bytes_per_pixel { previous[index - bytes_per_pixel] } else { 0 }),
+                other => return Err(format!("row filter {other} is not supported")),
+            };
+            row[index] = row[index].wrapping_add(prediction);
+        }
+
+        out.extend_from_slice(&row);
+        previous = row;
+    }
+    Ok(out)
+}
+
+/// PNG Paeth predictor, choosing the neighbouring byte closest to `left + up - upper_left`.
+fn paeth(left: u8, up: u8, upper_left: u8) -> u8 {
+    let estimate = left as i16 + up as i16 - upper_left as i16;
+    let (left_distance, up_distance, corner_distance) = (
+        (estimate - left as i16).abs(),
+        (estimate - up as i16).abs(),
+        (estimate - upper_left as i16).abs(),
+    );
+    if left_distance <= up_distance && left_distance <= corner_distance {
+        left
+    }
+    else if up_distance <= corner_distance {
+        up
+    }
+    else {
+        upper_left
+    }
+}
+
 fn font_object(base_font: &str) -> Vec<u8> {
     format!("<< /Type /Font /Subtype /Type1 /BaseFont /{base_font} /Encoding /WinAnsiEncoding >>").into_bytes()
 }
@@ -596,8 +896,8 @@ impl Pdf {
 #[cfg(test)]
 mod tests {
     use document_presentation::authored::{
-        ChartData, ChartElementInput, ChartSeries, ChartType, Deck, DeckCreateOptions, ShapeElementInput, SlideAddOptions,
-        TableCell, TableElementInput, TableRow, TextContent, TextElementInput, Transform, points_to_emu,
+        ChartData, ChartElementInput, ChartSeries, ChartType, Deck, DeckCreateOptions, ImageElementInput, ShapeElementInput,
+        SlideAddOptions, TableCell, TableElementInput, TableRow, TextContent, TextElementInput, Transform, points_to_emu,
     };
 
     use super::*;
@@ -710,6 +1010,119 @@ mod tests {
         let (bytes, losses) = build(&deck).expect("PDF builds");
         assert_eq!(count(&bytes, b"(caf\xE9 ??) Tj"), 1, "Latin-1 is kept and wider text falls back");
         assert!(losses.iter().any(|loss| loss["code"] == LOSS_GLYPH), "glyph loss is reported");
+    }
+
+    /// IEEE CRC-32, the checksum every PNG chunk carries.
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFFu32;
+        for &byte in bytes {
+            crc ^= byte as u32;
+            for _ in 0..8 {
+                let mask = (crc & 1).wrapping_neg();
+                crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+            }
+        }
+        !crc
+    }
+
+    fn png_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut out = (data.len() as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(kind);
+        out.extend_from_slice(data);
+        let mut checked = kind.to_vec();
+        checked.extend_from_slice(data);
+        out.extend_from_slice(&crc32(&checked).to_be_bytes());
+        out
+    }
+
+    /// Smallest PNG encoder the tests need: 8-bit, filter 0, no interlacing.
+    fn png(width: u32, height: u32, color_type: u8, rows: &[&[u8]]) -> Vec<u8> {
+        let mut out = PNG_SIGNATURE.to_vec();
+        let mut header = Vec::new();
+        header.extend_from_slice(&width.to_be_bytes());
+        header.extend_from_slice(&height.to_be_bytes());
+        header.extend_from_slice(&[8, color_type, 0, 0, 0]);
+        out.extend_from_slice(&png_chunk(b"IHDR", &header));
+        let mut raw = Vec::new();
+        for row in rows {
+            raw.push(0);
+            raw.extend_from_slice(row);
+        }
+        out.extend_from_slice(&png_chunk(b"IDAT", &Zlib::encode(&raw, DeflateLevel::Default)));
+        out.extend_from_slice(&png_chunk(b"IEND", &[]));
+        out
+    }
+
+    fn image_deck(bytes: Vec<u8>) -> Deck {
+        let mut deck = Deck::create(DeckCreateOptions::default());
+        deck.transaction(None, |edit| {
+            let asset = edit.add_asset("picture.png", "image/png", bytes.clone(), None)?;
+            let slide = edit.add_slide(SlideAddOptions { layout: None, index: None })?;
+            edit.add_image(
+                &slide,
+                ImageElementInput {
+                    asset,
+                    transform: Some(Transform::from_points(20.0, 30.0, 100.0, 50.0).unwrap()),
+                    alt: "Picture".to_string(),
+                },
+            )?;
+            Ok(())
+        })
+        .expect("image deck builds");
+        deck
+    }
+
+    #[test]
+    fn png_pictures_become_flate_image_objects() {
+        let rgb = png(2, 2, 2, &[&[255, 0, 0, 0, 255, 0], &[0, 0, 255, 255, 255, 255]]);
+        let deck = image_deck(rgb);
+        let (bytes, losses) = build(&deck).expect("PDF builds");
+        let text = String::from_utf8_lossy(&bytes);
+
+        assert!(losses.is_empty(), "a PNG picture is embedded, not dropped: {losses:?}");
+        assert_eq!(count(&bytes, b"/Subtype /Image"), 1, "one image XObject");
+        assert!(text.contains("/Width 2 /Height 2"), "the raster keeps its dimensions");
+        assert!(text.contains("/ColorSpace /DeviceRGB"));
+        assert!(text.contains("/BitsPerComponent 8"));
+        assert!(text.contains("/Filter /FlateDecode"));
+        assert!(!text.contains("/SMask"), "an opaque PNG needs no soft mask");
+        assert!(text.contains("/Im1 Do"), "the picture is painted on the page");
+
+        let raster = decode_png(&png(2, 2, 2, &[&[10, 20, 30, 40, 50, 60], &[70, 80, 90, 100, 110, 120]])).expect("decodes");
+        assert_eq!(raster.samples, vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120]);
+        assert!(raster.alpha.is_none());
+    }
+
+    #[test]
+    fn png_transparency_becomes_a_soft_mask() {
+        let rgba = png(2, 2, 6, &[&[255, 0, 0, 255, 0, 255, 0, 128], &[0, 0, 255, 0, 255, 255, 255, 255]]);
+        let deck = image_deck(rgba);
+        let (bytes, losses) = build(&deck).expect("PDF builds");
+        let text = String::from_utf8_lossy(&bytes);
+
+        assert!(losses.is_empty(), "an RGBA PNG is embedded, not dropped: {losses:?}");
+        assert_eq!(count(&bytes, b"/Subtype /Image"), 2, "the image plus its soft mask");
+        assert!(text.contains("/ColorSpace /DeviceRGB"));
+        assert!(text.contains("/ColorSpace /DeviceGray"), "the mask is an 8-bit gray plane");
+        assert!(text.contains("/SMask "), "the image references its mask");
+    }
+
+    #[test]
+    fn unsupported_pictures_are_reported_as_a_loss() {
+        let mut sixteen_bit = png(2, 2, 2, &[&[1, 2, 3, 4, 5, 6], &[7, 8, 9, 10, 11, 12]]);
+        sixteen_bit[24] = 16;
+        let deck = image_deck(sixteen_bit);
+        let (bytes, losses) = build(&deck).expect("PDF builds");
+
+        assert_eq!(count(&bytes, b"/Subtype /Image"), 0, "nothing fabricated for an unsupported PNG");
+        assert!(losses.iter().any(|loss| loss["code"] == LOSS_IMAGE), "the skip is reported: {losses:?}");
+    }
+
+    #[test]
+    fn row_filters_are_reversed() {
+        let filtered = [0, 10, 20, 1, 5, 15, 2, 1, 2, 3, 2, 3, 4, 1, 1];
+        let rows = unfilter(&filtered, 2, 5, 1).expect("filters reverse");
+        assert_eq!(rows, vec![10, 20, 5, 20, 6, 22, 5, 16, 6, 17]);
     }
 
     #[test]
