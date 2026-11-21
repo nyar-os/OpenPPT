@@ -8,6 +8,7 @@
 #![deny(missing_docs)]
 
 pub mod edit;
+pub mod export;
 pub mod pptx;
 
 use std::{
@@ -67,10 +68,11 @@ impl From<io::Error> for ServiceError {
 /// What this build can actually do.
 ///
 /// The matrix only claims what is wired: the native project container, editing,
-/// saving, static playback, the implemented rule checks and PresentationML
-/// playback. PPTX import is `partial` because charts, SmartArt, OLE objects,
-/// media and group shapes are refused with stable codes instead of being
-/// painted. Timed builds, transitions and media playback stay `unsupported`.
+/// saving, static playback, the implemented rule checks, PresentationML
+/// playback and export, and per-page SVG rendering. PPTX import and export are
+/// `partial` because charts, SmartArt, OLE objects, media, groups and tables are
+/// refused or dropped with stable codes instead of being faked. PNG/PDF
+/// rendering, timed builds, transitions and media playback stay `unsupported`.
 pub fn capabilities() -> Value {
     let mut formats = Map::new();
     for format in PRESENTATION_FORMATS {
@@ -78,7 +80,7 @@ pub fn capabilities() -> Value {
             json!({
                 "import": "partial",
                 "edit": "unsupported",
-                "export": "unsupported",
+                "export": if matches!(*format, "pptx" | "ppsx" | "potx") { "partial" } else { "unsupported" },
                 "playback": "partial",
                 "lossCodes": pptx::LOSS_CODES,
             })
@@ -108,7 +110,14 @@ pub fn capabilities() -> Value {
             "out-of-bounds": "supported",
         },
         "renderers": { "svg": "partial", "png": "unsupported", "pdf": "unsupported" },
-        "exportTargets": { "pptx": "unsupported", "ppsx": "unsupported", "potx": "unsupported", "pdf": "unsupported", "odp": "unsupported" },
+        "exportTargets": { "pptx": "partial", "ppsx": "partial", "potx": "partial", "pdf": "unsupported", "odp": "unsupported" },
+        "exportLossCodes": {
+            "pptx": [export::LOSS_TABLE, export::LOSS_CHART, export::LOSS_FORMULA, export::LOSS_MEDIA, export::LOSS_GROUP],
+            "ppsx": [export::LOSS_TABLE, export::LOSS_CHART, export::LOSS_FORMULA, export::LOSS_MEDIA, export::LOSS_GROUP],
+            "potx": [export::LOSS_TABLE, export::LOSS_CHART, export::LOSS_FORMULA, export::LOSS_MEDIA, export::LOSS_GROUP],
+            "pdf": [],
+            "odp": [],
+        },
         "playback": { "staticSlides": "supported", "builds": "unsupported", "transitions": "unsupported", "media": "unsupported" },
     })
 }
@@ -183,15 +192,21 @@ pub fn open(path: &Path) -> Result<Deck, ServiceError> {
 ///
 /// The input file is never overwritten unless `overwrite` is set.
 pub fn save(deck: &Deck, path: &Path, overwrite: bool) -> Result<usize, ServiceError> {
+    let bytes = encode_project(deck).map_err(ServiceError::from)?;
+    write_atomically(&bytes, path, overwrite)?;
+    Ok(bytes.len())
+}
+
+/// Publishes bytes to `path` through a temporary file and a rename.
+pub(crate) fn write_atomically(bytes: &[u8], path: &Path, overwrite: bool) -> Result<(), ServiceError> {
     if path.exists() && !overwrite {
         return Err(ServiceError::new(
             "io/exists",
             format!("`{}` already exists; pass overwrite to replace it", path.display()),
         ));
     }
-    let bytes = encode_project(deck).map_err(ServiceError::from)?;
     let temp = temporary_path(path);
-    fs::write(&temp, &bytes)
+    fs::write(&temp, bytes)
         .map_err(|error| ServiceError::new("io/write", format!("could not write `{}`: {error}", temp.display())))?;
     if overwrite && path.exists() {
         fs::remove_file(path)
@@ -201,13 +216,21 @@ pub fn save(deck: &Deck, path: &Path, overwrite: bool) -> Result<usize, ServiceE
         let _ = fs::remove_file(&temp);
         return Err(ServiceError::new("io/write", format!("could not publish `{}`: {error}", path.display())));
     }
-    Ok(bytes.len())
+    Ok(())
 }
 
 fn temporary_path(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(".tmp");
     PathBuf::from(name)
+}
+
+/// Writes the deck as a PresentationML package and reports what it dropped.
+///
+/// The request carries `format` (`pptx`, `ppsx` or `potx`), `target`,
+/// `overwrite` and an optional `lossPolicy`.
+pub fn export(deck: &Deck, request: &Value) -> Result<Value, ServiceError> {
+    export::export(deck, request)
 }
 
 /// Summary of one deck at its committed revision.
