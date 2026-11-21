@@ -6,7 +6,9 @@
 
 use std::collections::HashMap;
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use data_encoding::representation::Base64;
+
+use crate::base64_text;
 use document_presentation::authored::{
     AssetId, ChartData, ChartElementInput, Deck, DeckEdit, DeckError, Element, ElementContent, ElementId, Fill,
     FormulaElementInput, ImageElementInput, LayoutId, Line, LockFlags, MediaKind, ShapeElementInput, SlideAddOptions, SlideId,
@@ -133,7 +135,7 @@ pub fn asset_bytes(deck: &Deck, asset_id: &str) -> Result<Value, ServiceError> {
     Ok(json!({
         "id": asset.id.as_str(),
         "mediaType": asset.media_type,
-        "base64": STANDARD.encode(&asset.bytes),
+        "base64": base64_text(&asset.bytes),
     }))
 }
 
@@ -729,7 +731,10 @@ fn placeholder(operation: &Value) -> Result<Option<document_presentation::author
 
 fn decode_bytes(value: Option<&Value>) -> Result<Vec<u8>, DeckError> {
     let raw = value.and_then(Value::as_str).ok_or_else(|| invalid("inline assets need base64 `bytes`"))?;
-    STANDARD.decode(raw).map_err(|error| invalid(format!("asset bytes are not valid base64: {error}")))
+    Base64::standard()
+        .decode(raw.as_bytes())
+        .map(|facts| facts.value)
+        .map_err(|error| invalid(format!("asset bytes are not valid base64: {error}")))
 }
 
 fn element_text(element: &document_presentation::authored::Element) -> Option<String> {

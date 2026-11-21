@@ -146,6 +146,8 @@ export interface DeckCreateOptions {
     readonly title?: string;
     readonly size?: DeckSize;
     readonly theme?: ThemeId | ThemeDefinition;
+    /** One slide title per initial slide. */
+    readonly slides?: readonly string[];
 }
 
 /**
@@ -568,16 +570,90 @@ export interface RenderReport {
 
 /** Options of `deck.contactSheet()`. */
 export interface ContactSheetOptions {
+    /** SVG file to write the sheet to. */
     readonly target?: string;
     readonly format?: 'svg' | 'png';
+    /** Thumbnail columns; defaults to 3. */
     readonly columns?: number;
+    /** Gap between thumbnails in pixels; defaults to 12. */
+    readonly gap?: number;
+}
+
+/** One thumbnail placed on a contact sheet, in sheet pixels. */
+export interface ContactSheetTile {
+    readonly index: number;
+    readonly slideId: SlideId;
+    readonly xPx: number;
+    readonly yPx: number;
+    readonly widthPx: number;
+    readonly heightPx: number;
 }
 
 /** Whole-deck overview used for visual review. */
 export interface ContactSheet {
     readonly revision: number;
     readonly slideIds: readonly SlideId[];
+    readonly columns: number;
+    readonly gapPx: number;
+    readonly widthPx: number;
+    readonly heightPx: number;
+    readonly tiles: readonly ContactSheetTile[];
+    /** Standalone SVG document nesting one `<svg>` per slide. */
+    readonly svg: string;
+    readonly bytes: number;
     readonly path?: string;
+}
+
+/** What kind of text a search hit came from: a slide title or an element kind. */
+export type SearchHitKind = ElementKind | 'title';
+
+/** Options of `deck.search()`. */
+export interface SearchOptions {
+    /** Match exact letter case; defaults to `false`. */
+    readonly caseSensitive?: boolean;
+    /** Maximum hits to return; defaults to 100. */
+    readonly limit?: number;
+}
+
+/**
+ * One match of a search query.
+ *
+ * `text` is the complete text unit the match was found in (a slide title, a
+ * text element or a table joined with tabs and newlines), and `start`/`length`
+ * locate the match inside it. Title hits carry no `elementId`.
+ */
+export interface SearchHit {
+    readonly slideId: SlideId;
+    readonly slideIndex: number;
+    readonly elementId?: ElementId;
+    readonly kind: SearchHitKind;
+    readonly text: string;
+    readonly start: number;
+    readonly length: number;
+}
+
+/**
+ * Hits of `deck.search()`.
+ *
+ * This is a plain `SearchHit[]`; `truncated` is set when `limit` dropped
+ * matches, so callers can ask for a narrower query or a larger limit.
+ */
+export type SearchHitList = SearchHit[] & { readonly truncated: boolean };
+
+/** One slide of `deck.outline()`. */
+export interface OutlineSlide {
+    readonly id: SlideId;
+    readonly index: number;
+    readonly title: string;
+    readonly notes?: string;
+    readonly hidden: boolean;
+    readonly elementCount: number;
+}
+
+/** Whole-deck outline read from the committed summary; never a render. */
+export interface DeckOutline {
+    readonly revision: number;
+    readonly slides: readonly OutlineSlide[];
 }
 
 /** How lossy export treats findings. */

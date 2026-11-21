@@ -98,6 +98,12 @@ export interface ElementDetail {
     readonly alt: string | null;
     readonly locked: boolean;
     readonly text?: string;
+    /** Renderable payload of the element; tables expose their rows and cell text here. */
+    readonly content?: {
+        readonly rows?: ReadonlyArray<{
+            readonly cells?: ReadonlyArray<{ readonly text?: string }>;
+        }>;
+    } | null;
 }
 
 /** One slide with its element tree. */

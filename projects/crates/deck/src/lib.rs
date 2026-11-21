@@ -21,12 +21,19 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use boost_fs::{OverwritePolicy, PublishOptions, publish_bytes_with_options};
+use data_encoding::representation::Base64;
 use document_presentation::authored::{
     Deck, DeckCreateOptions, DeckError, DeckSize, InspectOptions, Severity, SlideAddOptions, decode_project, encode_project,
 };
 use serde_json::{Map, Value, json};
 
 pub use document_presentation::authored::{Deck as EditableDeck, InspectCheck};
+
+/// Encodes bytes as standard Base64 text.
+pub(crate) fn base64_text(bytes: &[u8]) -> String {
+    String::from_utf8(Base64::standard().encode(bytes)).expect("Base64 alphabet is ASCII")
+}
 
 /// Formats the product must classify, even while none is implemented.
 const PRESENTATION_FORMATS: &[&str] = &[
@@ -213,24 +220,21 @@ pub(crate) fn write_atomically(bytes: &[u8], path: &Path, overwrite: bool) -> Re
             format!("`{}` already exists; pass overwrite to replace it", path.display()),
         ));
     }
-    let temp = temporary_path(path);
-    fs::write(&temp, bytes)
-        .map_err(|error| ServiceError::new("io/write", format!("could not write `{}`: {error}", temp.display())))?;
-    if overwrite && path.exists() {
-        fs::remove_file(path)
-            .map_err(|error| ServiceError::new("io/write", format!("could not replace `{}`: {error}", path.display())))?;
-    }
-    if let Err(error) = fs::rename(&temp, path) {
-        let _ = fs::remove_file(&temp);
-        return Err(ServiceError::new("io/write", format!("could not publish `{}`: {error}", path.display())));
-    }
-    Ok(())
+    let options = PublishOptions {
+        overwrite: if overwrite { OverwritePolicy::Replace } else { OverwritePolicy::RefuseExisting },
+        ..PublishOptions::default()
+    };
+    publish_bytes_with_options(publish_target(path), bytes, options)
+        .map_err(|error| ServiceError::new("io/write", format!("could not publish `{}`: {error}", path.display())))
 }
 
-fn temporary_path(path: &Path) -> PathBuf {
-    let mut name = path.as_os_str().to_owned();
-    name.push(".tmp");
-    PathBuf::from(name)
+/// Keeps a bare file name anchored to the working directory so the publisher
+/// always has a folder to stage in.
+fn publish_target(path: &Path) -> PathBuf {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => path.to_path_buf(),
+        _ => PathBuf::from(".").join(path),
+    }
 }
 
 /// Renders every slide to a standalone SVG document.

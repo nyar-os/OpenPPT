@@ -24,7 +24,7 @@ source of truth. This build wires:
 
 | Area | Status | Notes |
 | --- | --- | --- |
-| Native project | supported | create, edit (including element z-order and slide backgrounds), undo/redo, save, static playback |
+| Native project | supported | create, JSON edit scripts (slides, elements and assets), undo/redo, save, static playback |
 | PPTX import and playback | partial | `.pptx`-family packages open as editable decks: text, placeholders, pictures, preset shapes, tables and slide backgrounds are carried. Charts, SmartArt, OLE objects, media and groups are refused or reported with stable loss codes |
 | PPTX / PPSX / POTX export | partial | text, preset shapes, pictures, tables and slide backgrounds are written; charts, formulas, media and groups are skipped and reported |
 | SVG rendering | supported | one standalone SVG page per slide |
@@ -48,23 +48,45 @@ anything would be dropped.
 
 ```bash
 open-ppt capabilities
-open-ppt create --title "Research review" --size 16:9 --out deck.project
+open-ppt create --title "Research review" --size 16:9 --theme default --out deck.project
 open-ppt open deck.project
 open-ppt import slides.pptx --out deck.project
+open-ppt edit deck.project --ops '[{"op":"slide.add"}]' --out deck.project --overwrite
+open-ppt edit deck.project --script edits.json --expected-revision 3 --out deck.project --overwrite
+open-ppt slide deck.project <slideId>
+open-ppt assets deck.project
+open-ppt undo deck.project --out deck.project --overwrite
 open-ppt inspect deck.project
 open-ppt render deck.project --format svg --out slides/
+open-ppt contact-sheet deck.project --out contact-sheet.svg --columns 4
 open-ppt export deck.project --format pptx --out output.pptx --overwrite
 open-ppt play deck.pptx
 ```
+
+`--script` accepts either an operations array or a full edit request
+(`{ "operations": [...], "expectedRevision": 3 }`), so a script can pin the
+revision it was written against. A failed edit writes no output file.
 
 ```ts
 import { OpenPPT } from '@wae/open-ppt';
 
 const ppt = new OpenPPT();
-const deck = await ppt.importPptx('slides.pptx');
-console.log(deck.importLosses); // stable import.pptx.* codes, never silent drops
-await deck.render({ format: 'svg', target: 'slides/' });
+
+const deck = await ppt.create({ title: 'Research review', size: '16:9', slides: ['Intro'] });
+console.log(deck.summary()); // id, revision, size, layouts, slides
+
+await deck.edit([{ op: 'slide.add', layout: 'title-body' }], { expectedRevision: deck.revision });
+await deck.play(); // one static frame per build step
+await deck.slide(deck.summary().slides[0].id);
 await deck.export({ format: 'pptx', target: 'output.pptx' });
+
+const imported = await ppt.importPptx('slides.pptx');
+console.log(imported.importLosses); // stable import.pptx.* codes, never silent drops
+await imported.render({ format: 'svg', target: 'slides/' });
+await imported.contactSheet({ target: 'contact-sheet.svg', columns: 4 }); // one SVG grid of thumbnails
+
+const reader = await ppt.readPptx('slides.pptx'); // playback without an editable deck
+console.log(reader.slide(1).svg);
 await ppt.dispose();
 ```
 

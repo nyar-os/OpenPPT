@@ -10,6 +10,23 @@
 
 export { Deck } from './deck.js';
 export { OpenPPT } from './open-ppt.js';
+export { PptxReader } from './pptx-reader.js';
+export { buildOutline } from './outline.js';
+export type { OutlineSource, OutlineSourceSlide } from './outline.js';
+export { collectTextSegments, findTextMatches, searchSlides } from './search.js';
+export type { TextMatch, TextSegment, TextSourceElement, TextSourceSlide } from './search.js';
+export type {
+    AssetRecord,
+    DeckSummary,
+    DeckSummarySlide,
+    EditOperation,
+    EditReport,
+    ElementDetail,
+    HistoryReport,
+    PlayFrame,
+    PlayReport,
+    SlideDetail,
+} from './service.js';
 export { closePptx, openPptx, pptxSlide } from './service.js';
 export type { PptxHandle, PptxIssue, PptxPresentation, PptxSlideFrame } from './service.js';
 export { GuiError, closeGui, defaultGuiContentDir, isGuiOpen, openGui, pumpEvents, runGui } from './gui.js';

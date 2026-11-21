@@ -5,7 +5,7 @@
 //! formulas, media and groups are skipped and reported as loss codes rather
 //! than drawn as placeholders.
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use crate::base64_text;
 use document_presentation::authored::{
     Deck, Element, ElementContent, Fill, Line, TableContent, TextAlign, TextParagraph, TextRun,
 };
@@ -206,7 +206,7 @@ fn image_svg(deck: &Deck, asset: &document_presentation::authored::AssetId, fram
     if asset.bytes.is_empty() {
         return None;
     }
-    let href = format!("data:{};base64,{}", asset.media_type, STANDARD.encode(&asset.bytes));
+    let href = format!("data:{};base64,{}", asset.media_type, base64_text(&asset.bytes));
     Some(format!(
         "<image x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\" xlink:href=\"{}\" href=\"{}\"/>",
         num(frame.x),

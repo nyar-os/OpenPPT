@@ -2,25 +2,53 @@
 /**
  * Command-line assembly only.
  *
- * Every command maps options onto one operation of `service.ts`; deck logic,
- * saving and playback stay native. Help text and errors come from
- * `@wae/commander`, so the CLI does not grow its own parser.
+ * Every command maps options onto one method of `new OpenPPT()` or of the
+ * `Deck` it returns; deck logic, saving and playback stay native. Help text and
+ * errors come from `@wae/commander`, so the CLI does not grow its own parser.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { createCli } from '@wae/commander';
+import type { CommandContext } from '@wae/commander';
 
-import * as service from './service.js';
+import { OpenPPT } from './open-ppt.js';
 import { runGui } from './gui.js';
-import type { DeckSummary, PlayFrame, PptxPresentation } from './service.js';
-import type { ExportFormat, InspectCheck, InspectReport, OpenPPTCapabilities } from './types.js';
+import type {
+    DeckOutline,
+    DeckSummary,
+    EditOperation,
+    EditReport,
+    PlayFrame,
+    PptxPresentation,
+    SearchHitList,
+    SlideDetail,
+} from './index.js';
+import type {
+    AssetInfo,
+    DeckSize,
+    ExportFormat,
+    InspectCheck,
+    InspectReport,
+    OpenPPTCapabilities,
+    SaveReport,
+} from './types.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 const cli = createCli('open-ppt').locales(path.join(here, '..', 'locales')).intro('cli.intro');
+
+/** Runs `work` against one session and always releases its handles. */
+async function withSession<T>(work: (ppt: OpenPPT) => Promise<T>): Promise<T> {
+    const ppt = new OpenPPT();
+    try {
+        return await work(ppt);
+    } finally {
+        await ppt.dispose();
+    }
+}
 
 // Exported for contract audits that import the built entry to inspect the
 // command tree. Nothing runs until the file is executed as the program entry.
@@ -104,8 +132,127 @@ function describePresentation(presentation: PptxPresentation): string {
     return lines.join('\n');
 }
 
+function describeSlide(detail: SlideDetail): string {
+    const lines = [
+        `slide ${detail.id} index=${detail.index} title=${detail.title}${detail.hidden ? ' (hidden)' : ''} layout=${detail.layout ?? '-'} notes=${detail.notes ?? '-'}`,
+    ];
+    for (const element of detail.elements) {
+        const transform = element.transform;
+        const rotation = transform.rotationDeg === null ? '' : ` rotation=${transform.rotationDeg}deg`;
+        const text = element.text === undefined ? '' : ` text=${JSON.stringify(element.text)}`;
+        lines.push(
+            `  ${element.id} ${element.kind} ${transform.xPt},${transform.yPt} ${transform.widthPt}x${transform.heightPt}pt${rotation} locked=${element.locked} alt=${element.alt ?? '-'}${text}`,
+        );
+    }
+    return lines.join('\n');
+}
+
+function describeSearch(revision: number, query: string, hits: SearchHitList): string {
+    const lines = [
+        `search revision=${revision} query=${JSON.stringify(query)} matches=${hits.length}${hits.truncated ? ' truncated=true' : ''}`,
+    ];
+    for (const hit of hits) {
+        const element = hit.elementId === undefined ? '' : ` ${hit.elementId}`;
+        lines.push(`  [${hit.slideIndex}] ${hit.slideId}${element} ${hit.kind} @${hit.start}+${hit.length} ${singleLine(hit.text)}`);
+    }
+    return lines.join('\n');
+}
+
+function describeOutline(outline: DeckOutline): string {
+    const lines = [`outline revision=${outline.revision} slides=${outline.slides.length}`];
+    for (const slide of outline.slides) {
+        const notes = slide.notes === undefined ? '' : ` notes=${JSON.stringify(slide.notes)}`;
+        lines.push(
+            `  [${slide.index}] ${slide.id} ${slide.title}${slide.hidden ? ' (hidden)' : ''} elements=${slide.elementCount}${notes}`,
+        );
+    }
+    return lines.join('\n');
+}
+
+function singleLine(text: string): string {
+    return text.replace(/\s+/g, ' ').trim();
+}
+
+function describeAssets(assets: ReadonlyArray<AssetInfo>): string {
+    const lines = [`assets total=${assets.length}`];
+    for (const asset of assets) {
+        const license = asset.license === undefined ? '' : ` license=${asset.license}`;
+        lines.push(`  ${asset.id} ${asset.name} ${asset.mediaType} bytes=${asset.bytes} sha256=${asset.sha256}${license}`);
+    }
+    return lines.join('\n');
+}
+
+function describeEdit(report: EditReport, saved: SaveReport | undefined): string {
+    const lines = [`edited revision=${report.revision} results=${report.results.length}`];
+    report.results.forEach((result, index) => {
+        lines.push(`  [${index}] ${result ?? '-'}`);
+    });
+    for (const [token, id] of Object.entries(report.resolved)) {
+        lines.push(`  resolved ${token} -> ${id}`);
+    }
+    if (saved !== undefined) {
+        lines.push(`saved ${saved.target} revision=${saved.revision} bytes=${saved.bytes}`);
+    }
+    return lines.join('\n');
+}
+
+function editFailure(ctx: CommandContext, message: string): never {
+    return ctx.fail('open-ppt.cli.edit-invalid', { message });
+}
+
+/** Reads an operations array, or a full edit request that carries one. */
+function readEditScript(raw: string, ctx: CommandContext): { operations: ReadonlyArray<EditOperation>; expectedRevision?: number } {
+    const parsed = (() => {
+        try {
+            return JSON.parse(raw) as unknown;
+        } catch (error) {
+            return editFailure(ctx, `the edit script is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    })();
+    let operations: unknown[] | undefined;
+    let expectedRevision: unknown;
+    if (Array.isArray(parsed)) {
+        operations = parsed;
+    } else if (parsed !== null && typeof parsed === 'object') {
+        const request = parsed as { readonly operations?: unknown; readonly expectedRevision?: unknown };
+        if (Array.isArray(request.operations)) {
+            operations = request.operations;
+            expectedRevision = request.expectedRevision;
+        }
+    }
+    if (operations === undefined) {
+        editFailure(ctx, 'an edit script is an operations array or an object with an `operations` array');
+    }
+    if (operations.length === 0) {
+        editFailure(ctx, 'an edit script needs at least one operation');
+    }
+    for (const [index, operation] of operations.entries()) {
+        if (operation === null || typeof operation !== 'object' || Array.isArray(operation)) {
+            editFailure(ctx, `operation ${index} must be a JSON object`);
+        }
+    }
+    if (expectedRevision === undefined) {
+        return { operations: operations as ReadonlyArray<EditOperation> };
+    }
+    if (typeof expectedRevision !== 'number' || !Number.isInteger(expectedRevision) || expectedRevision < 0) {
+        editFailure(ctx, '`expectedRevision` must be a non-negative integer');
+    }
+    return { operations: operations as ReadonlyArray<EditOperation>, expectedRevision };
+}
+
+function readRevision(raw: string | undefined, ctx: CommandContext): number | undefined {
+    if (raw === undefined) {
+        return undefined;
+    }
+    const value = Number(raw);
+    if (raw.trim().length === 0 || !Number.isInteger(value) || value < 0) {
+        return ctx.fail('open-ppt.cli.edit-invalid', { message: '`--expected-revision <n>` must be a non-negative integer' });
+    }
+    return value;
+}
+
 cli.command('capabilities', 'cli.cmd.capabilities').actionCtx(async (_options, _args, ctx) => {
-    const matrix = service.capabilities();
+    const matrix = await withSession((ppt) => ppt.capabilities());
     ctx.emitResult(matrix, describeCapabilities(matrix));
     return 0;
 });
@@ -115,6 +262,7 @@ cli
     .option('--out <file>', 'cli.opt.out')
     .option('--title <title>', 'cli.opt.title')
     .option('--size <ratio>', 'cli.opt.size', { enum: ['16:9', '4:3', '16:10'] })
+    .option('--theme <name>', 'cli.opt.theme')
     .option('--slide <title>...', 'cli.opt.slide')
     .option('--overwrite', 'cli.opt.overwrite')
     .actionCtx(async (options, _args, ctx) => {
@@ -123,16 +271,19 @@ cli
             ctx.fail('open-ppt.cli.out-required', { message: '`--out <file>` is required' });
             return 2;
         }
-        const created = service.create({ title: text(options, 'title'), size: text(options, 'size'), slides: list(options, 'slide') });
-        try {
-            const report = service.save(created.handle, out, flag(options, 'overwrite'));
+        await withSession(async (ppt) => {
+            const deck = await ppt.create({
+                title: text(options, 'title'),
+                size: text(options, 'size') as DeckSize | undefined,
+                theme: text(options, 'theme'),
+                slides: list(options, 'slide'),
+            });
+            const report = await deck.save({ target: out, overwrite: flag(options, 'overwrite') });
             ctx.emitResult(
-                { ...report, deck: created.deck },
-                `created ${out} revision=${report.revision} slides=${report.slides}`,
+                { ...report, deck: deck.summary() },
+                `created ${out} revision=${report.revision} slides=${deck.summary().slides.length}`,
             );
-        } finally {
-            service.close(created.handle);
-        }
+        });
         return 0;
     });
 
@@ -142,12 +293,11 @@ cli.command('open', 'cli.cmd.open').actionCtx(async (options, _args, ctx) => {
         ctx.fail('open-ppt.cli.file-required', { message: 'a project file is required' });
         return 2;
     }
-    const opened = service.open(file);
-    try {
-        ctx.emitResult(opened.deck, describeDeck(opened.deck));
-    } finally {
-        service.close(opened.handle);
-    }
+    await withSession(async (ppt) => {
+        const deck = await ppt.open({ path: file });
+        const summary = deck.summary();
+        ctx.emitResult(summary, describeDeck(summary));
+    });
     return 0;
 });
 
@@ -161,24 +311,23 @@ cli
             ctx.fail('open-ppt.cli.file-required', { message: 'a presentation file is required' });
             return 2;
         }
-        const imported = service.importPptx(file);
-        try {
+        await withSession(async (ppt) => {
+            const deck = await ppt.importPptx(file);
             const out = text(options, 'out');
-            const saved = out === undefined ? undefined : service.save(imported.handle, out, flag(options, 'overwrite'));
-            const lines = [describeDeck(imported.deck)];
+            const saved = out === undefined ? undefined : await deck.save({ target: out, overwrite: flag(options, 'overwrite') });
+            const summary = deck.summary();
+            const lines = [describeDeck(summary)];
             if (saved !== undefined) {
-                lines.push(`saved ${saved.path} bytes=${saved.bytes}`);
+                lines.push(`saved ${saved.target} bytes=${saved.bytes}`);
             }
-            for (const loss of imported.losses) {
+            for (const loss of deck.importLosses) {
                 lines.push(`  ${loss.status} ${loss.code} slide=${loss.slide ?? '-'} shape=${loss.shape ?? '-'} ${loss.message}`);
             }
             ctx.emitResult(
-                { deck: imported.deck, losses: imported.losses, ...(saved === undefined ? {} : { saved }) },
+                { deck: summary, losses: deck.importLosses, ...(saved === undefined ? {} : { saved }) },
                 lines.join('\n'),
             );
-        } finally {
-            service.close(imported.handle);
-        }
+        });
         return 0;
     });
 
@@ -195,14 +344,13 @@ cli
             ?.split(',')
             .map((name) => name.trim())
             .filter((name) => name.length > 0) as InspectCheck[] | undefined;
-        const opened = service.open(file);
-        try {
-            const report = service.inspect(opened.handle, checks);
+        let passed = false;
+        await withSession(async (ppt) => {
+            const report = await ppt.inspect({ path: file }, { checks });
             ctx.emitResult(report, describeReport(report));
-            return report.passed ? 0 : 1;
-        } finally {
-            service.close(opened.handle);
-        }
+            passed = report.passed;
+        });
+        return passed ? 0 : 1;
     });
 
 cli
@@ -216,19 +364,17 @@ cli
         }
         const out = text(options, 'out');
         if (isPresentationPath(file)) {
-            const opened = service.openPptx(file);
-            try {
+            await withSession(async (ppt) => {
+                const reader = await ppt.readPptx(file);
                 if (out !== undefined) {
                     mkdirSync(out, { recursive: true });
-                    for (const slide of opened.presentation.slides) {
-                        const frame = service.pptxSlide(opened.handle, slide.index);
+                    for (const slide of reader.presentation.slides) {
+                        const frame = reader.slide(slide.index);
                         writeFileSync(path.join(out, `slide-${slide.index}.svg`), frame.svg, 'utf8');
                     }
                 }
-                ctx.emitResult(opened.presentation, describePresentation(opened.presentation));
-            } finally {
-                service.closePptx(opened.handle);
-            }
+                ctx.emitResult(reader.presentation, describePresentation(reader.presentation));
+            });
             return 0;
         }
         if (out !== undefined) {
@@ -237,13 +383,11 @@ cli
             });
             return 2;
         }
-        const opened = service.open(file);
-        try {
-            const report = service.play(opened.handle);
+        await withSession(async (ppt) => {
+            const deck = await ppt.open({ path: file });
+            const report = await deck.play();
             ctx.emitResult(report, report.frames.map(describeFrame).join('\n'));
-        } finally {
-            service.close(opened.handle);
-        }
+        });
         return 0;
     });
 
@@ -263,29 +407,52 @@ cli
             return 2;
         }
         const out = text(options, 'out');
-        const opened = service.open(file);
-        try {
-            const report = service.render(opened.handle, { format: 'svg' });
-            let pages = report.pages;
-            if (out !== undefined) {
-                mkdirSync(out, { recursive: true });
-                pages = pages.map((page) => {
-                    const target = path.join(out, `slide-${page.index + 1}.svg`);
-                    writeFileSync(target, page.svg, 'utf8');
-                    return { ...page, path: target, bytes: Buffer.byteLength(page.svg) };
-                });
-            }
-            const lines = [`render revision=${report.revision} format=svg pages=${pages.length}`];
-            for (const page of pages) {
+        await withSession(async (ppt) => {
+            const deck = await ppt.open({ path: file });
+            const report = await deck.render({ format: 'svg', target: out });
+            const lines = [`render revision=${report.revision} format=svg pages=${report.pages.length}`];
+            for (const page of report.pages) {
                 lines.push(`  [${page.index}] ${page.widthPx}x${page.heightPx}px ${page.path ?? page.slideId}`);
             }
             for (const loss of report.losses) {
                 lines.push(`  ${loss.code} ${loss.slideId ?? '-'} ${loss.message}`);
             }
-            ctx.emitResult({ ...report, pages }, lines.join('\n'));
-        } finally {
-            service.close(opened.handle);
+            ctx.emitResult(report, lines.join('\n'));
+        });
+        return 0;
+    });
+
+cli
+    .command('contact-sheet', 'cli.cmd.contactSheet')
+    .option('--out <file>', 'cli.opt.contactSheetOut')
+    .option('--columns <n>', 'cli.opt.contactSheetColumns')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-ppt.cli.file-required', { message: 'a project file is required' });
+            return 2;
         }
+        const out = text(options, 'out');
+        if (out === undefined) {
+            ctx.fail('cli.error.contactSheetOutMissing');
+        }
+        const rawColumns = text(options, 'columns');
+        let columns: number | undefined;
+        if (rawColumns !== undefined) {
+            const value = Number(rawColumns);
+            if (rawColumns.trim().length === 0 || !Number.isInteger(value) || value < 1) {
+                ctx.fail('cli.error.contactSheetColumnsInvalid');
+            }
+            columns = value;
+        }
+        await withSession(async (ppt) => {
+            const deck = await ppt.open({ path: file });
+            const sheet = await deck.contactSheet({ target: out, columns });
+            const lines = [
+                `contact-sheet ${out} slides=${sheet.slideIds.length} columns=${sheet.columns} size=${sheet.widthPx}x${sheet.heightPx}px bytes=${sheet.bytes}`,
+            ];
+            ctx.emitResult(sheet, lines.join('\n'));
+        });
         return 0;
     });
 
@@ -312,9 +479,9 @@ cli
         }
         const format: ExportFormat =
             requested === 'ppsx' ? 'ppsx' : requested === 'potx' ? 'potx' : requested === 'pdf' ? 'pdf' : 'pptx';
-        const opened = service.open(file);
-        try {
-            const report = service.exportDeck(opened.handle, {
+        await withSession(async (ppt) => {
+            const deck = await ppt.open({ path: file });
+            const report = await deck.export({
                 format,
                 target,
                 overwrite: flag(options, 'overwrite'),
@@ -324,11 +491,179 @@ cli
                 lines.push(`  ${loss.code} ${loss.slideId ?? '-'} ${loss.message}`);
             }
             ctx.emitResult(report, lines.join('\n'));
-        } finally {
-            service.close(opened.handle);
-        }
+        });
         return 0;
     });
+
+function readScriptFile(file: string, ctx: CommandContext): string {
+    try {
+        return readFileSync(file, 'utf8');
+    } catch (error) {
+        return ctx.fail('open-ppt.cli.script-unreadable', {
+            message: `cannot read edit script \`${file}\`: ${error instanceof Error ? error.message : String(error)}`,
+        });
+    }
+}
+
+cli
+    .command('edit', 'cli.cmd.edit')
+    .option('--ops <json>', 'cli.opt.ops')
+    .option('--script <file>', 'cli.opt.editScript')
+    .option('--out <file>', 'cli.opt.out')
+    .option('--overwrite', 'cli.opt.overwrite')
+    .option('--expected-revision <n>', 'cli.opt.expectedRevision')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-ppt.cli.file-required', { message: 'a project file is required' });
+            return 2;
+        }
+        const ops = text(options, 'ops');
+        const script = text(options, 'script');
+        let raw: string;
+        if (ops !== undefined && script !== undefined) {
+            ctx.fail('open-ppt.cli.edit-source', { message: '`--ops <json>` and `--script <file>` are mutually exclusive' });
+            return 2;
+        } else if (script !== undefined) {
+            raw = readScriptFile(script, ctx);
+        } else if (ops !== undefined) {
+            raw = ops;
+        } else {
+            ctx.fail('open-ppt.cli.edit-source', { message: 'exactly one of `--ops <json>` or `--script <file>` is required' });
+            return 2;
+        }
+        const request = readEditScript(raw, ctx);
+        const flagRevision = readRevision(text(options, 'expected-revision'), ctx);
+        const expectedRevision = flagRevision ?? request.expectedRevision;
+        await withSession(async (ppt) => {
+            const deck = await ppt.open({ path: file });
+            const report = await deck.edit(request.operations, { expectedRevision });
+            const out = text(options, 'out');
+            const saved = out === undefined ? undefined : await deck.save({ target: out, overwrite: flag(options, 'overwrite') });
+            ctx.emitResult(
+                { revision: report.revision, results: report.results, resolved: report.resolved, ...(saved === undefined ? {} : { saved }) },
+                describeEdit(report, saved),
+            );
+        });
+        return 0;
+    });
+
+cli.command('slide', 'cli.cmd.slide').actionCtx(async (options, _args, ctx) => {
+    const file = input(options);
+    if (file === undefined) {
+        ctx.fail('open-ppt.cli.file-required', { message: 'a project file is required' });
+        return 2;
+    }
+    const slideId = options._?.[1];
+    if (slideId === undefined) {
+        ctx.fail('open-ppt.cli.slide-required', { message: 'a slide id is required' });
+        return 2;
+    }
+    await withSession(async (ppt) => {
+        const deck = await ppt.open({ path: file });
+        const detail = await deck.slide(slideId);
+        ctx.emitResult(detail, describeSlide(detail));
+    });
+    return 0;
+});
+
+cli
+    .command('search', 'cli.cmd.search')
+    .option('--case-sensitive', 'cli.opt.caseSensitive')
+    .option('--limit <n>', 'cli.opt.limit')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-ppt.cli.file-required', { message: 'a project file is required' });
+            return 2;
+        }
+        const query = options._?.[1];
+        if (query === undefined || query.trim().length === 0) {
+            ctx.fail('cli.error.searchQueryMissing');
+        }
+        const rawLimit = text(options, 'limit');
+        let limit: number | undefined;
+        if (rawLimit !== undefined) {
+            const value = Number(rawLimit);
+            if (rawLimit.trim().length === 0 || !Number.isInteger(value) || value < 1) {
+                ctx.fail('cli.error.searchLimitInvalid');
+            }
+            limit = value;
+        }
+        await withSession(async (ppt) => {
+            const deck = await ppt.open({ path: file });
+            const hits = await deck.search(query, {
+                caseSensitive: flag(options, 'case-sensitive'),
+                ...(limit === undefined ? {} : { limit }),
+            });
+            ctx.emitResult(
+                { revision: deck.revision, query, hits, truncated: hits.truncated },
+                describeSearch(deck.revision, query, hits),
+            );
+        });
+        return 0;
+    });
+
+cli.command('outline', 'cli.cmd.outline').actionCtx(async (options, _args, ctx) => {
+    const file = input(options);
+    if (file === undefined) {
+        ctx.fail('open-ppt.cli.file-required', { message: 'a project file is required' });
+        return 2;
+    }
+    await withSession(async (ppt) => {
+        const deck = await ppt.open({ path: file });
+        const outline = deck.outline();
+        ctx.emitResult(outline, describeOutline(outline));
+    });
+    return 0;
+});
+
+cli.command('assets', 'cli.cmd.assets').actionCtx(async (options, _args, ctx) => {
+    const file = input(options);
+    if (file === undefined) {
+        ctx.fail('open-ppt.cli.file-required', { message: 'a project file is required' });
+        return 2;
+    }
+    await withSession(async (ppt) => {
+        const deck = await ppt.open({ path: file });
+        const assets = await deck.assets.list();
+        ctx.emitResult(assets, describeAssets(assets));
+    });
+    return 0;
+});
+
+function historyCommand(name: 'undo' | 'redo'): void {
+    cli
+        .command(name, `cli.cmd.${name}`)
+        .option('--out <file>', 'cli.opt.out')
+        .option('--overwrite', 'cli.opt.overwrite')
+        .actionCtx(async (options, _args, ctx) => {
+            const file = input(options);
+            if (file === undefined) {
+                ctx.fail('open-ppt.cli.file-required', { message: 'a project file is required' });
+                return 2;
+            }
+            await withSession(async (ppt) => {
+                const deck = await ppt.open({ path: file });
+                const changed = name === 'undo' ? await deck.undo() : await deck.redo();
+                const revision = deck.revision;
+                const out = text(options, 'out');
+                const saved = out === undefined ? undefined : await deck.save({ target: out, overwrite: flag(options, 'overwrite') });
+                const lines = [`${name} revision=${revision} changed=${changed}`];
+                if (saved !== undefined) {
+                    lines.push(`saved ${saved.target} revision=${saved.revision} bytes=${saved.bytes}`);
+                }
+                ctx.emitResult(
+                    { revision, changed, ...(saved === undefined ? {} : { saved }) },
+                    lines.join('\n'),
+                );
+            });
+            return 0;
+        });
+}
+
+historyCommand('undo');
+historyCommand('redo');
 
 cli.command('gui', 'cli.cmd.gui').actionCtx(async (_options, _args, ctx) => {
     try {

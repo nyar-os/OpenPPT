@@ -8,10 +8,13 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, extname, join } from 'node:path';
+import { basename, dirname, extname, join } from 'node:path';
 
+import { buildContactSheetSvg } from './contact-sheet.js';
 import { NotImplementedError, OpenPPTError } from './errors.js';
 import type { DeckIntent, PresentationFormat } from './formats.js';
+import { buildOutline } from './outline.js';
+import { searchSlides } from './search.js';
 import * as service from './service.js';
 import type { DeckHandle, DeckSummary } from './service.js';
 import type {
@@ -24,6 +27,7 @@ import type {
     ContactSheet,
     ContactSheetOptions,
     DeckId,
+    DeckOutline,
     DeckTransaction,
     Element,
     ElementId,
@@ -47,6 +51,8 @@ import type {
     RenderReport,
     SaveOptions,
     SaveReport,
+    SearchHitList,
+    SearchOptions,
     ShapeElementInput,
     Slide,
     SlideAddOptions,
@@ -211,6 +217,73 @@ export class Deck {
         return this.state.importLosses;
     }
 
+    /** Current committed summary: id, revision, size, layouts and slides. */
+    summary(): DeckSummary {
+        this.assertOpen('deck.summary');
+        this.refresh();
+        return this.state.summary;
+    }
+
+    /**
+     * Finds visible text across every slide, without rendering.
+     *
+     * Matching is case-insensitive by default. `limit` (default 100) caps the
+     * returned hits and sets `truncated` on the result array when matches were
+     * dropped. An empty query is `session/argument-invalid`.
+     */
+    async search(query: string, options: SearchOptions = {}): Promise<SearchHitList> {
+        this.assertOpen('deck.search');
+        if (typeof query !== 'string' || query.trim().length === 0) {
+            throw new OpenPPTError('session/argument-invalid', '`query` must be a non-empty string');
+        }
+        if (options.caseSensitive !== undefined && typeof options.caseSensitive !== 'boolean') {
+            throw new OpenPPTError('session/argument-invalid', '`caseSensitive` must be a boolean');
+        }
+        const limit = options.limit ?? 100;
+        if (!Number.isInteger(limit) || limit < 1) {
+            throw new OpenPPTError('session/argument-invalid', '`limit` must be a positive integer');
+        }
+        this.refresh();
+        const slides = this.state.summary.slides.map((slide) => service.slide(this.handle('deck.search'), slide.id));
+        return searchSlides(slides, query, { ...options, limit });
+    }
+
+    /**
+     * Lists slide titles, notes, hidden flags and element counts.
+     *
+     * The outline comes from the committed summary, so it never triggers a
+     * render.
+     */
+    outline(): DeckOutline {
+        this.assertOpen('deck.outline');
+        this.refresh();
+        return buildOutline(this.state.summary);
+    }
+
+    /**
+     * Applies one atomic edit script and returns one result per operation.
+     *
+     * This is the same operation the CLI exposes as `--ops`; element helpers on
+     * `SlideView` are convenience wrappers over it.
+     */
+    async edit(
+        operations: ReadonlyArray<service.EditOperation>,
+        options: { readonly expectedRevision?: number } = {},
+    ): Promise<service.EditReport> {
+        return this.apply(operations, options.expectedRevision);
+    }
+
+    /** Reads one slide with its element tree. */
+    async slide(slideId: SlideId): Promise<service.SlideDetail> {
+        return this.slideDetail(slideId);
+    }
+
+    /** Walks the static show and returns one frame per build step. */
+    async play(): Promise<service.PlayReport> {
+        this.assertOpen('deck.play');
+        return service.play(this.state.handle);
+    }
+
     /** Whether {@link close} has run. */
     get closed(): boolean {
         return this.state.closed;
@@ -275,9 +348,36 @@ export class Deck {
     }
 
     /** Renders a whole-deck overview for visual review. */
-    async contactSheet(_options?: ContactSheetOptions): Promise<ContactSheet> {
+    async contactSheet(options?: ContactSheetOptions): Promise<ContactSheet> {
         this.assertOpen('deck.contactSheet');
-        throw new NotImplementedError('deck.contactSheet');
+        if (options?.format !== undefined && options.format !== 'svg') {
+            throw new NotImplementedError(`deck.contactSheet.${options.format}`);
+        }
+        const columns = options?.columns ?? 3;
+        if (!Number.isInteger(columns) || columns < 1) {
+            throw new OpenPPTError('session/argument-invalid', '`columns` must be a positive integer');
+        }
+        const gap = options?.gap ?? 12;
+        if (!Number.isFinite(gap) || gap < 0) {
+            throw new OpenPPTError('session/argument-invalid', '`gap` must be a non-negative number');
+        }
+        const report = await this.render({ format: 'svg' });
+        const layout = buildContactSheetSvg(report.pages, { columns, gap });
+        const bytes = Buffer.byteLength(layout.svg);
+        const target = options?.target;
+        let sheetPath: string | undefined;
+        if (target !== undefined && target.length > 0) {
+            mkdirSync(dirname(target), { recursive: true });
+            writeFileSync(target, layout.svg, 'utf8');
+            sheetPath = target;
+        }
+        return {
+            revision: report.revision,
+            slideIds: report.pages.map((page) => page.slideId),
+            ...layout,
+            bytes,
+            ...(sheetPath === undefined ? {} : { path: sheetPath }),
+        };
     }
 
     /** Writes a projection (`pptx`, `ppsx`, `potx` or a static `pdf`) and reports what it dropped. */

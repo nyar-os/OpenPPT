@@ -9,7 +9,15 @@
             "inspect": "Run geometry and rule checks on a project file",
             "play": "Walk the static show of a project file, or play a PPTX package",
             "render": "Render every slide of a project file to a standalone SVG",
+            "contactSheet": "Render every slide of a project file into one SVG contact sheet",
             "export": "Write a project file as an editable PresentationML package or a static PDF",
+            "edit": "Apply one atomic JSON edit script to a project file",
+            "slide": "Print one slide and its elements from a project file",
+            "search": "Search visible text across every slide of a project file",
+            "outline": "Print the slide outline of a project file without rendering",
+            "assets": "List the embedded assets of a project file",
+            "undo": "Restore the previous committed revision of a project file",
+            "redo": "Reapply the last undone revision of a project file",
             "gui": "Open the VMZ editor window on the native deck"
         },
         "opt": {
@@ -17,6 +25,7 @@
             "importOut": "Native project file to write after import",
             "title": "Deck title",
             "size": "Slide ratio: 16:9, 4:3 or 16:10",
+            "theme": "Theme name or id applied to the new deck",
             "slide": "Add a slide with this title (repeatable)",
             "overwrite": "Replace the output file when it already exists",
             "svg": "Directory to write one SVG frame per slide",
@@ -24,7 +33,20 @@
             "renderFormat": "Render format: svg",
             "exportFormat": "Export format: pptx, ppsx, potx or pdf",
             "exportOut": "PresentationML package or PDF to write",
-            "checks": "Comma-separated checks: overflow, contrast, alignment, assets, fonts, out-of-bounds"
+            "checks": "Comma-separated checks: overflow, contrast, alignment, assets, fonts, out-of-bounds",
+            "ops": "Operations array or full edit request as inline JSON",
+            "editScript": "JSON file holding an operations array or a full edit request",
+            "expectedRevision": "Reject the edit unless the deck is at this committed revision",
+            "contactSheetOut": "SVG file to write the contact sheet to",
+            "contactSheetColumns": "Thumbnail columns (positive integer, default 3)",
+            "caseSensitive": "Match text with exact letter case",
+            "limit": "Maximum number of matches to report (positive integer, default 100)"
+        },
+        "error": {
+            "contactSheetOutMissing": "`--out <file>` is required",
+            "contactSheetColumnsInvalid": "`--columns <n>` must be a positive integer",
+            "searchQueryMissing": "a search query is required",
+            "searchLimitInvalid": "`--limit <n>` must be a positive integer"
         }
     }
 }

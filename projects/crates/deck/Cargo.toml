@@ -9,8 +9,9 @@ repository.workspace = true
 description = "Thin binding from OpenPPT to the upstream editable deck model"
 
 [dependencies]
-base64 = { workspace = true }
+boost-fs = { workspace = true }
 data-binary-zip = { workspace = true }
+data-encoding = { workspace = true }
 data-compression = { workspace = true }
 document-formats = { workspace = true }
 document-presentation = { workspace = true }

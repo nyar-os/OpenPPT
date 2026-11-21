@@ -22,6 +22,9 @@ editable deck model to the following operations:
   `deck.importLosses` with stable `import.pptx.*` codes instead of being faked.
 - `capabilities()` reports the real matrix. Anything not wired is
   `unsupported`, or `partial` with its loss codes.
+- `await deck.search('revenue')` finds visible text across every slide (case
+  insensitive by default, `limit` 100) and `deck.outline()` lists slide titles,
+  notes and element counts without rendering.
 
 PPTX import and export remain `partial`: charts, SmartArt, OLE objects, media
 and groups are skipped and reported, and non-solid backgrounds are flattened to

@@ -9,6 +9,7 @@
 import { OpenPPTError } from './errors.js';
 import { Deck, type DeckOwner } from './deck.js';
 import { formatFromPath, type DeckIntent, type PresentationFormat } from './formats.js';
+import { PptxReader } from './pptx-reader.js';
 import * as service from './service.js';
 import type {
     CustomDeckSize,
@@ -28,6 +29,7 @@ export class OpenPPT implements DeckOwner {
     readonly locale: string;
     private closed = false;
     private readonly decks = new Set<Deck>();
+    private readonly readers = new Set<PptxReader>();
 
     constructor(options: OpenPPTOptions = {}) {
         this.locale = options.locale ?? 'en';
@@ -65,6 +67,7 @@ export class OpenPPT implements DeckOwner {
             title: options?.title,
             size: options?.size === undefined ? undefined : createSize(options.size),
             theme,
+            slides: options?.slides === undefined ? undefined : [...options.slides],
         };
         return this.attach(service.create(request));
     }
@@ -129,6 +132,10 @@ export class OpenPPT implements DeckOwner {
             return;
         }
         this.closed = true;
+        for (const reader of [...this.readers]) {
+            reader.close();
+        }
+        this.readers.clear();
         for (const deck of [...this.decks]) {
             try {
                 await deck.close();
@@ -138,6 +145,22 @@ export class OpenPPT implements DeckOwner {
             }
         }
         this.decks.clear();
+    }
+
+    /**
+     * Opens a `.pptx`-family package for playback without building an editable
+     * deck. The returned reader is closed by {@link dispose} if the caller
+     * does not close it first.
+     */
+    async readPptx(path: string): Promise<PptxReader> {
+        this.assertActive();
+        if (typeof path !== 'string' || path.trim().length === 0) {
+            throw new OpenPPTError('session/argument-invalid', '`readPptx()` needs a non-empty package path');
+        }
+        const opened = service.openPptx(path);
+        const reader: PptxReader = new PptxReader(opened, () => this.readers.delete(reader));
+        this.readers.add(reader);
+        return reader;
     }
 
     /** @internal */
