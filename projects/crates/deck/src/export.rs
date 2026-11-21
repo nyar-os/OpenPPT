@@ -1,10 +1,10 @@
 //! PresentationML package writer.
 //!
 //! The writer emits one minimal but openable OPC package: presentation, one
-//! slide master, one blank layout, one theme, the document properties and one
-//! slide part per deck slide. Text, preset shapes, pictures and tables are
-//! carried; charts, formulas, media and groups are skipped and reported as loss
-//! codes.
+//! slide master, one blank layout, one theme, the document properties, one
+//! slide part per deck slide and a notes slide plus notes master when a slide
+//! carries notes. Text, preset shapes, pictures and tables are carried; charts,
+//! formulas, media and groups are skipped and reported as loss codes.
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -80,6 +80,8 @@ const REL_SLIDE_MASTER: &str = "http://schemas.openxmlformats.org/officeDocument
 const REL_SLIDE_LAYOUT: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout";
 const REL_THEME: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme";
 const REL_IMAGE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
+const REL_NOTES_SLIDE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide";
+const REL_NOTES_MASTER: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesMaster";
 const REL_OFFICE_DOCUMENT: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument";
 const REL_CORE_PROPERTIES: &str = "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties";
 const REL_EXTENDED_PROPERTIES: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties";
@@ -88,6 +90,8 @@ const REL_EXTENDED_PROPERTIES: &str = "http://schemas.openxmlformats.org/officeD
 struct SlidePart {
     xml: String,
     rels: Vec<(String, String, &'static str)>,
+    /// Speaker notes written to a notes slide part.
+    notes: Option<String>,
 }
 
 /// One embedded picture part.
@@ -99,15 +103,19 @@ struct MediaPart {
 
 /// Writes the deck as a PresentationML package to `request.target`.
 ///
-/// The request carries `format` (`pptx`, `ppsx` or `potx`), `target`,
+/// The request carries `format` (`pptx`, `ppsx`, `potx` or `pdf`), `target`,
 /// `overwrite` and an optional `lossPolicy` (`warn` by default, `error` refuses
-/// to write when anything would be dropped).
+/// to write when anything would be dropped). `pdf` is a static projection and
+/// is written by [`crate::pdf`].
 pub fn export(deck: &Deck, request: &Value) -> Result<Value, ServiceError> {
     let format = request.get("format").and_then(Value::as_str).unwrap_or("pptx");
+    if format == "pdf" {
+        return crate::pdf::export(deck, request);
+    }
     let format = Format::parse(format).ok_or_else(|| {
         ServiceError::new(
             "format/unsupported",
-            format!("`{format}` is not a presentation export target; use pptx, ppsx or potx"),
+            format!("`{format}` is not a presentation export target; use pptx, ppsx, potx or pdf"),
         )
     })?;
     let target = request
@@ -216,28 +224,45 @@ fn build(deck: &Deck, format: Format) -> Result<(Vec<u8>, Vec<Value>), ServiceEr
                 }
             }
         }
-        slides.push(SlidePart { xml: slide_xml(slide, &body), rels });
+        let notes = notes_for(slide);
+        if notes.is_some() {
+            let relationship = format!("rId{}", rels.len() + 1);
+            rels.push((relationship, format!("../notesSlides/notesSlide{}.xml", slides.len() + 1), REL_NOTES_SLIDE));
+        }
+        slides.push(SlidePart { xml: slide_xml(slide, &body), rels, notes });
     }
 
     let size = deck.size();
-    let presentation = presentation_xml(size.width_emu, size.height_emu, slides.len());
-    let content_types = content_types_xml(format, slides.len(), &media);
+    let has_notes = slides.iter().any(|slide| slide.notes.is_some());
+    let presentation = presentation_xml(size.width_emu, size.height_emu, slides.len(), has_notes);
+    let content_types = content_types_xml(format, &slides, &media);
     let mut zip = ZipWriter::new();
     zip.push(ZipEntry::stored("[Content_Types].xml", content_types));
     zip.push(ZipEntry::stored("_rels/.rels", root_rels_xml()));
     zip.push(ZipEntry::stored("docProps/core.xml", core_xml(deck)));
     zip.push(ZipEntry::stored("docProps/app.xml", app_xml(slides.len())));
     zip.push(ZipEntry::stored("ppt/presentation.xml", presentation));
-    zip.push(ZipEntry::stored("ppt/_rels/presentation.xml.rels", presentation_rels_xml(slides.len())));
+    zip.push(ZipEntry::stored("ppt/_rels/presentation.xml.rels", presentation_rels_xml(slides.len(), has_notes)));
     zip.push(ZipEntry::stored("ppt/slideMasters/slideMaster1.xml", master_xml()));
     zip.push(ZipEntry::stored("ppt/slideMasters/_rels/slideMaster1.xml.rels", master_rels_xml()));
     zip.push(ZipEntry::stored("ppt/slideLayouts/slideLayout1.xml", layout_xml()));
     zip.push(ZipEntry::stored("ppt/slideLayouts/_rels/slideLayout1.xml.rels", layout_rels_xml()));
     zip.push(ZipEntry::stored("ppt/theme/theme1.xml", theme_xml()));
+    if has_notes {
+        zip.push(ZipEntry::stored("ppt/notesMasters/notesMaster1.xml", notes_master_xml()));
+        zip.push(ZipEntry::stored("ppt/notesMasters/_rels/notesMaster1.xml.rels", notes_master_rels_xml()));
+    }
     for (index, slide) in slides.iter().enumerate() {
         zip.push(ZipEntry::stored(format!("ppt/slides/slide{}.xml", index + 1), slide.xml.as_str()));
         if !slide.rels.is_empty() {
             zip.push(ZipEntry::stored(format!("ppt/slides/_rels/slide{}.xml.rels", index + 1), slide_rels_xml(&slide.rels)));
+        }
+        if let Some(notes) = &slide.notes {
+            zip.push(ZipEntry::stored(format!("ppt/notesSlides/notesSlide{}.xml", index + 1), notes_xml(notes)));
+            zip.push(ZipEntry::stored(
+                format!("ppt/notesSlides/_rels/notesSlide{}.xml.rels", index + 1),
+                notes_slide_rels_xml(),
+            ));
         }
     }
     for part in &media {
@@ -563,7 +588,7 @@ fn escape_attr(value: &str) -> String {
     escape_text(value)
 }
 
-fn content_types_xml(format: Format, slide_count: usize, media: &[MediaPart]) -> String {
+fn content_types_xml(format: Format, slides: &[SlidePart], media: &[MediaPart]) -> String {
     let mut xml = String::from(XML_HEADER);
     xml.push_str("<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">");
     xml.push_str("<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>");
@@ -586,11 +611,22 @@ fn content_types_xml(format: Format, slide_count: usize, media: &[MediaPart]) ->
     xml.push_str("<Override PartName=\"/ppt/slideMasters/slideMaster1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml\"/>");
     xml.push_str("<Override PartName=\"/ppt/slideLayouts/slideLayout1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml\"/>");
     xml.push_str("<Override PartName=\"/ppt/theme/theme1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.theme+xml\"/>");
-    for index in 0..slide_count {
+    for index in 0..slides.len() {
         xml.push_str(&format!(
             "<Override PartName=\"/ppt/slides/slide{}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>",
             index + 1
         ));
+    }
+    if slides.iter().any(|slide| slide.notes.is_some()) {
+        xml.push_str("<Override PartName=\"/ppt/notesMasters/notesMaster1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.notesMaster+xml\"/>");
+        for (index, slide) in slides.iter().enumerate() {
+            if slide.notes.is_some() {
+                xml.push_str(&format!(
+                    "<Override PartName=\"/ppt/notesSlides/notesSlide{}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml\"/>",
+                    index + 1
+                ));
+            }
+        }
     }
     xml.push_str("</Types>");
     xml
@@ -602,10 +638,13 @@ fn root_rels_xml() -> String {
     )
 }
 
-fn presentation_xml(width_emu: i64, height_emu: i64, slide_count: usize) -> String {
+fn presentation_xml(width_emu: i64, height_emu: i64, slide_count: usize, has_notes: bool) -> String {
     let mut xml = String::from(XML_HEADER);
     xml.push_str(&format!("<p:presentation xmlns:a=\"{NS_A}\" xmlns:r=\"{NS_R}\" xmlns:p=\"{NS_P}\">"));
     xml.push_str("<p:sldMasterIdLst><p:sldMasterId id=\"2147483648\" r:id=\"rId1\"/></p:sldMasterIdLst>");
+    if has_notes {
+        xml.push_str(&format!("<p:notesMasterIdLst><p:notesMasterId r:id=\"rId{}\"/></p:notesMasterIdLst>", slide_count + 2));
+    }
     xml.push_str("<p:sldIdLst>");
     for index in 0..slide_count {
         xml.push_str(&format!("<p:sldId id=\"{}\" r:id=\"rId{}\"/>", 256 + index, index + 2));
@@ -617,7 +656,7 @@ fn presentation_xml(width_emu: i64, height_emu: i64, slide_count: usize) -> Stri
     xml
 }
 
-fn presentation_rels_xml(slide_count: usize) -> String {
+fn presentation_rels_xml(slide_count: usize, has_notes: bool) -> String {
     let mut xml = String::from(XML_HEADER);
     xml.push_str("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
     xml.push_str(&format!("<Relationship Id=\"rId1\" Type=\"{REL_SLIDE_MASTER}\" Target=\"slideMasters/slideMaster1.xml\"/>"));
@@ -626,6 +665,12 @@ fn presentation_rels_xml(slide_count: usize) -> String {
             "<Relationship Id=\"rId{}\" Type=\"{REL_SLIDE}\" Target=\"slides/slide{}.xml\"/>",
             index + 2,
             index + 1
+        ));
+    }
+    if has_notes {
+        xml.push_str(&format!(
+            "<Relationship Id=\"rId{}\" Type=\"{REL_NOTES_MASTER}\" Target=\"notesMasters/notesMaster1.xml\"/>",
+            slide_count + 2
         ));
     }
     xml.push_str("</Relationships>");
@@ -663,6 +708,43 @@ fn master_xml() -> String {
 fn layout_xml() -> String {
     format!(
         "{XML_HEADER}<p:sldLayout xmlns:a=\"{NS_A}\" xmlns:r=\"{NS_R}\" xmlns:p=\"{NS_P}\" type=\"blank\" preserve=\"1\"><p:cSld name=\"Blank\"><p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/><a:chOff x=\"0\" y=\"0\"/><a:chExt cx=\"0\" cy=\"0\"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>"
+    )
+}
+
+fn notes_for(slide: &DeckSlide) -> Option<String> {
+    slide.notes.as_deref().filter(|notes| !notes.trim().is_empty()).map(str::to_string)
+}
+
+/// Builds one notes slide with a body placeholder carrying the note paragraphs.
+fn notes_xml(notes: &str) -> String {
+    let mut xml = String::from(XML_HEADER);
+    xml.push_str(&format!("<p:notes xmlns:a=\"{NS_A}\" xmlns:r=\"{NS_R}\" xmlns:p=\"{NS_P}\">"));
+    xml.push_str("<p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/><a:chOff x=\"0\" y=\"0\"/><a:chExt cx=\"0\" cy=\"0\"/></a:xfrm></p:grpSpPr>");
+    xml.push_str("<p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Notes Placeholder\"/><p:cNvSpPr/><p:nvPr><p:ph type=\"body\" idx=\"1\"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/>");
+    for line in notes.split('\n') {
+        xml.push_str("<a:p><a:r><a:rPr lang=\"en-US\"/><a:t>");
+        xml.push_str(&escape_text(line));
+        xml.push_str("</a:t></a:r></a:p>");
+    }
+    xml.push_str("</p:txBody></p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:notes>");
+    xml
+}
+
+fn notes_slide_rels_xml() -> String {
+    format!(
+        "{XML_HEADER}<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"{REL_NOTES_MASTER}\" Target=\"../notesMasters/notesMaster1.xml\"/></Relationships>"
+    )
+}
+
+fn notes_master_xml() -> String {
+    format!(
+        "{XML_HEADER}<p:notesMaster xmlns:a=\"{NS_A}\" xmlns:r=\"{NS_R}\" xmlns:p=\"{NS_P}\"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/><a:chOff x=\"0\" y=\"0\"/><a:chExt cx=\"0\" cy=\"0\"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld><p:clrMap bg1=\"lt1\" tx1=\"dk1\" bg2=\"lt2\" tx2=\"dk2\" accent1=\"accent1\" accent2=\"accent2\" accent3=\"accent3\" accent4=\"accent4\" accent5=\"accent5\" accent6=\"accent6\" hlink=\"hlink\" folHlink=\"folHlink\"/><p:notesStyle><a:lvl1pPr><a:defRPr sz=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\"/></a:solidFill><a:latin typeface=\"Calibri\"/></a:defRPr></a:lvl1pPr></p:notesStyle></p:notesMaster>"
+    )
+}
+
+fn notes_master_rels_xml() -> String {
+    format!(
+        "{XML_HEADER}<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"{REL_THEME}\" Target=\"../theme/theme1.xml\"/></Relationships>"
     )
 }
 
@@ -875,5 +957,27 @@ mod tests {
         .expect_err("a lossy projection must fail under the error policy");
         assert_eq!(error.code, "export/loss-exceeded");
         assert!(!target.exists(), "nothing is written when the error policy refuses");
+    }
+
+    #[test]
+    fn speaker_notes_are_written_and_reimported() {
+        let mut deck = Deck::create(DeckCreateOptions::default());
+        deck.transaction(None, |edit| {
+            let slide = edit.add_slide(SlideAddOptions { layout: None, index: None })?;
+            edit.set_slide_notes(&slide, Some("Opening & closing\nSecond line <tag>".to_string()))?;
+            Ok(())
+        })
+        .expect("notes deck builds");
+
+        let (bytes, losses) = build(&deck, Format::Pptx).expect("package builds");
+        assert!(losses.is_empty(), "notes are written, not dropped: {losses:?}");
+        let archive = String::from_utf8_lossy(&bytes);
+        assert!(archive.contains("ppt/notesSlides/notesSlide1.xml"), "a notes slide part is written");
+        assert!(archive.contains("ppt/notesMasters/notesMaster1.xml"), "a notes master part is written");
+        assert!(archive.contains("presentationml.notesSlide+xml"), "the notes slide has a content type");
+        assert!(archive.contains("presentationml.notesMaster+xml"), "the notes master has a content type");
+
+        let imported = import_pptx_bytes("notes.pptx", &bytes).expect("the written package imports");
+        assert_eq!(imported.slides[0].notes.as_deref(), Some("Opening & closing\nSecond line <tag>"));
     }
 }
