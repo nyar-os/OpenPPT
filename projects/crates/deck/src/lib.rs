@@ -10,6 +10,7 @@
 pub mod edit;
 pub mod export;
 pub mod pptx;
+pub mod render;
 
 use std::{
     fmt, fs, io,
@@ -109,7 +110,7 @@ pub fn capabilities() -> Value {
             "fonts": "unsupported",
             "out-of-bounds": "supported",
         },
-        "renderers": { "svg": "partial", "png": "unsupported", "pdf": "unsupported" },
+        "renderers": { "svg": "supported", "png": "unsupported", "pdf": "unsupported" },
         "exportTargets": { "pptx": "partial", "ppsx": "partial", "potx": "partial", "pdf": "unsupported", "odp": "unsupported" },
         "exportLossCodes": {
             "pptx": [export::LOSS_TABLE, export::LOSS_CHART, export::LOSS_FORMULA, export::LOSS_MEDIA, export::LOSS_GROUP],
@@ -223,6 +224,14 @@ fn temporary_path(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(".tmp");
     PathBuf::from(name)
+}
+
+/// Renders every slide to a standalone SVG document.
+///
+/// The report carries one page per slide (`slideId`, `index`, pixel size and
+/// SVG) plus one loss entry per construct that has no SVG representation.
+pub fn render(deck: &Deck) -> Result<Value, ServiceError> {
+    render::render(deck)
 }
 
 /// Writes the deck as a PresentationML package and reports what it dropped.
