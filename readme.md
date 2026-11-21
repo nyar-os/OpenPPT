@@ -24,11 +24,12 @@ source of truth. This build wires:
 
 | Area | Status | Notes |
 | --- | --- | --- |
-| Native project | supported | create, edit, undo/redo, save, static playback |
-| PPTX import and playback | partial | `.pptx`-family packages open as editable decks: text, placeholders, pictures, preset shapes and tables are carried. Charts, SmartArt, OLE objects, media, groups and slide backgrounds are refused or reported with stable loss codes |
+| Native project | supported | create, edit (including element z-order and slide backgrounds), undo/redo, save, static playback |
+| PPTX import and playback | partial | `.pptx`-family packages open as editable decks: text, placeholders, pictures, preset shapes, tables and slide backgrounds are carried. Charts, SmartArt, OLE objects, media and groups are refused or reported with stable loss codes |
 | PPTX / PPSX / POTX export | partial | text, preset shapes, pictures, tables and slide backgrounds are written; charts, formulas, media and groups are skipped and reported |
 | SVG rendering | supported | one standalone SVG page per slide |
-| PNG / PDF rendering | unsupported | needs a raster backend this build does not ship |
+| PDF export | partial | a static projection paints slide backgrounds, text, tables, preset shapes and JPEG/PNG pictures; PNG transparency becomes a soft mask, while charts, formulas, media, groups and other picture encodings are skipped and reported |
+| PNG rendering | unsupported | needs a raster backend this build does not ship |
 | Timed builds, transitions, media playback | unsupported | the static model has no timeline |
 
 Losses are returned as data (`losses` with a stable `code`), never as invisible

@@ -330,6 +330,30 @@ export type Alignment = 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom
 /** Stacking commands for `ElementsApi.zOrder()`. */
 export type ZOrder = 'front' | 'back' | 'forward' | 'backward';
 
+/**
+ * Edit operation that moves one element to a zero-based paint index.
+ *
+ * Answers with `session/argument-invalid` when the index is outside the slide
+ * and `object/not-found` when the slide or element does not exist.
+ */
+export interface ElementReorderOperation {
+    readonly op: 'element.reorder';
+    readonly slideId: SlideId;
+    readonly elementId: ElementId;
+    readonly index: number;
+}
+
+/**
+ * Edit operation that paints a solid slide background, or clears it with `null`.
+ *
+ * `color` is a three- or six-digit hex colour and is normalised to `#RRGGBB`.
+ */
+export interface SlideSetBackgroundOperation {
+    readonly op: 'slide.setBackground';
+    readonly slideId: SlideId;
+    readonly fill: { readonly kind: 'solid'; readonly color: string } | null;
+}
+
 /** Element operations of one slide. */
 export interface ElementsApi {
     addText(input: TextElementInput): Promise<Element>;

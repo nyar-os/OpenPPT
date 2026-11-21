@@ -78,9 +78,9 @@ impl From<io::Error> for ServiceError {
 /// SVG rendering and a static PDF export. PPTX import, edit and export stay
 /// `partial` because charts, SmartArt, OLE objects, media and groups are refused
 /// or dropped with stable codes instead of being faked. PDF export is `partial`
-/// because pictures other than JPEG, non-Latin glyphs, charts, formulas, media
-/// and groups are reported rather than painted. PNG rendering, timed builds,
-/// transitions and media playback stay `unsupported`.
+/// because pictures other than JPEG and PNG, non-Latin glyphs, charts, formulas,
+/// media and groups are reported rather than painted. PNG rendering, timed
+/// builds, transitions and media playback stay `unsupported`.
 pub fn capabilities() -> Value {
     let mut formats = Map::new();
     for format in PRESENTATION_FORMATS {
