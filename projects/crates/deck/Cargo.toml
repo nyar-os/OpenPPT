@@ -12,8 +12,8 @@ description = "Thin binding from OpenPPT to the upstream editable deck model"
 boost-fs = { workspace = true }
 data-binary-zip = { workspace = true }
 data-encoding = { workspace = true }
-data-compression = { workspace = true }
 document-formats = { workspace = true }
 document-presentation = { workspace = true }
+document-presentation-pdf = { workspace = true }
 document-presentation-pptx = { workspace = true }
 serde_json = { workspace = true }

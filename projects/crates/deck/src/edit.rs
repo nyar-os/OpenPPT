@@ -866,7 +866,7 @@ mod tests {
         crate::export::export(&deck, &json!({ "format": "pdf", "target": pdf.display().to_string(), "overwrite": true }))
             .expect("pdf export");
         let pdf_text = String::from_utf8_lossy(&std::fs::read(&pdf).expect("pdf bytes")).to_string();
-        assert!(pdf_text.contains("0.07 0.13 0.2 rg"), "PDF paints the new background: {pdf_text}");
+        assert!(pdf_text.contains("0.067 0.133 0.2 rg"), "PDF paints the new background: {pdf_text}");
 
         let pptx = directory.join("background.pptx");
         crate::export::export(&deck, &json!({ "format": "pptx", "target": pptx.display().to_string(), "overwrite": true }))
