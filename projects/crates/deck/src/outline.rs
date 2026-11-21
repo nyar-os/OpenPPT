@@ -148,11 +148,9 @@ mod tests {
         let report = outline(&deck, &json!({ "maxPointsPerSlide": 1 })).expect("the cap applies");
         assert_eq!(report["slides"][0]["points"], json!(["Ship the editor"]));
 
-        for request in [
-            json!({ "maxPointsPerSlide": 0 }),
-            json!({ "maxPointsPerSlide": 21 }),
-            json!({ "maxPointsPerSlide": "many" }),
-        ] {
+        for request in
+            [json!({ "maxPointsPerSlide": 0 }), json!({ "maxPointsPerSlide": 21 }), json!({ "maxPointsPerSlide": "many" })]
+        {
             let error = outline(&deck, &request).expect_err("an unusable limit is refused");
             assert_eq!(error.code, "session/argument-invalid");
         }

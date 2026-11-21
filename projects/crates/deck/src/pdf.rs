@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use document_presentation::authored::Deck;
-use document_presentation_pdf::{export_pdf_bytes, PdfLoss};
+use document_presentation_pdf::{PdfLoss, export_pdf_bytes};
 use serde_json::{Value, json};
 
 use crate::ServiceError;
@@ -69,11 +69,11 @@ mod tests {
     use std::fs;
 
     use document_presentation::authored::{
-        ChartData, ChartElementInput, ChartSeries, ChartType, DeckCreateOptions, Fill, FormulaElementInput, ImageElementInput, Line,
-        MediaKind, ShapeElementInput, SlideAddOptions, TableCell, TableElementInput, TableRow, TextContent, TextElementInput, Transform,
-        points_to_emu,
+        ChartData, ChartElementInput, ChartSeries, ChartType, DeckCreateOptions, Fill, FormulaElementInput, ImageElementInput,
+        Line, MediaKind, ShapeElementInput, SlideAddOptions, TableCell, TableElementInput, TableRow, TextContent,
+        TextElementInput, Transform, points_to_emu,
     };
-    use document_presentation_pdf::{LOSS_CHART, LOSS_FORMULA, LOSS_MEDIA, LOSS_IMAGE, export_pdf_bytes};
+    use document_presentation_pdf::{LOSS_CHART, LOSS_FORMULA, LOSS_IMAGE, LOSS_MEDIA, export_pdf_bytes};
     use serde_json::json;
 
     use super::*;
@@ -102,7 +102,7 @@ mod tests {
         png
     }
 
-    fn adler32(mut state: u32, byte: u8) -> u32 {
+    fn adler32(state: u32, byte: u8) -> u32 {
         let a = (state & 0xFFFF) + u32::from(byte);
         let b = (state >> 16) + a;
         (b % 65521) << 16 | (a % 65521)
@@ -133,7 +133,8 @@ mod tests {
     /// Builds one slide holding every construct the projection handles plus the
     /// three it reports as loss.
     fn medium_deck() -> Deck {
-        let mut deck = Deck::create(DeckCreateOptions { title: Some("PDF medium".to_string()), ..DeckCreateOptions::default() });
+        let mut deck =
+            Deck::create(DeckCreateOptions { title: Some("PDF medium".to_string()), ..DeckCreateOptions::default() });
         deck.transaction(None, |edit| {
             let slide = edit.add_slide(SlideAddOptions { layout: None, index: None })?;
             edit.add_text(
@@ -197,7 +198,13 @@ mod tests {
                 },
             )?;
             let clip = edit.add_asset("clip.mp4", "video/mp4", b"not-a-real-video".to_vec(), None)?;
-            edit.add_media(&slide, MediaKind::Video, clip, "Clip", Some(Transform::from_points(300.0, 320.0, 120.0, 60.0).unwrap()))?;
+            edit.add_media(
+                &slide,
+                MediaKind::Video,
+                clip,
+                "Clip",
+                Some(Transform::from_points(300.0, 320.0, 120.0, 60.0).unwrap()),
+            )?;
             Ok(())
         })
         .expect("medium deck builds");
@@ -233,11 +240,8 @@ mod tests {
         fs::create_dir_all(&dir).expect("temp dir");
         let target = dir.join("deck.pdf");
 
-        let report = export(
-            &deck,
-            &json!({ "target": target.display().to_string(), "overwrite": true, "lossPolicy": "warn" }),
-        )
-        .expect("export succeeds with warnings");
+        let report = export(&deck, &json!({ "target": target.display().to_string(), "overwrite": true, "lossPolicy": "warn" }))
+            .expect("export succeeds with warnings");
         assert_eq!(report["format"], json!("pdf"));
         assert!(report["bytes"].as_u64().unwrap_or(0) > 0);
         assert!(report["losses"].as_array().expect("losses array").len() >= 3);

@@ -42,8 +42,8 @@ pub fn export(deck: &Deck, request: &Value) -> Result<Value, ServiceError> {
         return Err(ServiceError::new("session/argument-invalid", "`lossPolicy` must be `warn` or `error`"));
     }
 
-    let written = export_presentation_bytes(deck, format)
-        .map_err(|error| ServiceError::new("format/invalid-package", error.message))?;
+    let written =
+        export_presentation_bytes(deck, format).map_err(|error| ServiceError::new("format/invalid-package", error.message))?;
     let losses: Vec<Value> = written
         .losses
         .iter()
@@ -128,8 +128,9 @@ mod tests {
     #[test]
     fn export_writes_a_reimportable_package() {
         let target = temp_target("notes.pptx");
-        let report = export(&lossy_deck(), &json!({ "format": "pptx", "target": target.display().to_string(), "overwrite": true }))
-            .expect("package writes");
+        let report =
+            export(&lossy_deck(), &json!({ "format": "pptx", "target": target.display().to_string(), "overwrite": true }))
+                .expect("package writes");
         assert_eq!(report["format"], json!("pptx"));
         assert_eq!(report["losses"][0]["code"], json!(LOSS_CHART));
         let bytes = std::fs::read(&target).expect("written package");
