@@ -70,14 +70,6 @@ fn build(presentation: PptxPresentation) -> Result<ImportOutcome, ServiceError> 
             if let Some(notes) = slide.notes.as_deref().filter(|notes| !notes.trim().is_empty()) {
                 edit.set_slide_notes(&slide_id, Some(notes.to_string()))?;
             }
-            if slide.background.is_some() {
-                losses.push(loss(
-                    codes::FILL_APPROXIMATED,
-                    Some(slide.index),
-                    None,
-                    "the editable slide model has no background slot, so the slide background is dropped",
-                ));
-            }
             for shape in &slide.shapes {
                 import_shape(edit, &slide_id, slide.index, shape, layout.as_ref(), &mut losses)?;
             }
@@ -86,7 +78,40 @@ fn build(presentation: PptxPresentation) -> Result<ImportOutcome, ServiceError> 
     })
     .map_err(ServiceError::from)?;
 
+    // `DeckEdit` has no background setter, so the committed document is cloned,
+    // the backgrounds are written back in slide order and the deck is rebuilt
+    // through the validating constructor. Only solid fills survive; the reader
+    // flattens gradient, pattern and picture backgrounds to `Fill::None`.
+    let mut document = deck.document().clone();
+    for (index, slide) in presentation.slides.iter().enumerate() {
+        let Some(fill) = slide.background.as_ref()
+        else {
+            continue;
+        };
+        let Some(target) = document.slides.get_mut(index)
+        else {
+            continue;
+        };
+        target.background = Some(authored_background(fill, slide.index, &mut losses));
+    }
+    let deck = Deck::from_document(document).map_err(ServiceError::from)?;
+
     Ok(ImportOutcome { deck, losses })
+}
+
+fn authored_background(fill: &PptxFill, slide_index: u32, losses: &mut Vec<Value>) -> Fill {
+    match fill {
+        PptxFill::Solid(color) => Fill::Solid { color: color.clone() },
+        PptxFill::None => {
+            losses.push(loss(
+                codes::FILL_APPROXIMATED,
+                Some(slide_index),
+                None,
+                "the slide background is not a solid colour (no fill, gradient, pattern or picture) and is kept as an explicit no-fill",
+            ));
+            Fill::None
+        }
+    }
 }
 
 /// Codes the editable model carries even though the reader calls them partial.
@@ -481,6 +506,34 @@ mod tests {
             })
             .expect("the table survives a second round trip");
         assert_eq!(table.rows[0].cells[0].text.text(), "A");
+    }
+
+    #[test]
+    fn solid_slide_backgrounds_survive_export_and_import() {
+        let mut deck = Deck::create(DeckCreateOptions::default());
+        deck.transaction(None, |edit| {
+            edit.add_slide(SlideAddOptions { layout: None, index: None })?;
+            Ok(())
+        })
+        .expect("background deck builds");
+        let mut document = deck.document().clone();
+        document.slides[0].background = Some(Fill::Solid { color: "#1F2937".to_string() });
+        let deck = Deck::from_document(document).expect("the background deck validates");
+
+        let target = export_to_temp(&deck, "background.pptx");
+        let bytes = std::fs::read(&target).expect("package bytes");
+        let archive = String::from_utf8_lossy(&bytes);
+        assert!(
+            archive.contains("<p:bg><p:bgPr><a:solidFill><a:srgbClr val=\"1F2937\"/></a:solidFill>"),
+            "the slide background must be written as a solid fill"
+        );
+
+        let outcome = import_pptx(&target).expect("the written package imports");
+        assert_eq!(outcome.deck.slides()[0].background, Some(Fill::Solid { color: "#1F2937".to_string() }));
+
+        let render = crate::render::render(&outcome.deck).expect("the imported deck renders");
+        let svg = render["pages"][0]["svg"].as_str().expect("svg page");
+        assert!(svg.contains("fill=\"#1F2937\""), "the SVG background uses the imported colour: {svg}");
     }
 
     #[test]
