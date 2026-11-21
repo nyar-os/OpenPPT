@@ -280,10 +280,10 @@ export class Deck {
         throw new NotImplementedError('deck.contactSheet');
     }
 
-    /** Writes a projection (`pptx`, `ppsx`, `potx`) and reports what it dropped. */
+    /** Writes a projection (`pptx`, `ppsx`, `potx` or a static `pdf`) and reports what it dropped. */
     async export(options: ExportOptions): Promise<ExportReport> {
         this.assertOpen('deck.export');
-        if (options.format !== 'pptx' && options.format !== 'ppsx' && options.format !== 'potx') {
+        if (options.format !== 'pptx' && options.format !== 'ppsx' && options.format !== 'potx' && options.format !== 'pdf') {
             throw new NotImplementedError(`deck.export.${options.format}`);
         }
         const target = options.target;

@@ -291,7 +291,7 @@ cli
 
 cli
     .command('export', 'cli.cmd.export')
-    .option('--format <format>', 'cli.opt.exportFormat', { enum: ['pptx', 'ppsx', 'potx'] })
+    .option('--format <format>', 'cli.opt.exportFormat', { enum: ['pptx', 'ppsx', 'potx', 'pdf'] })
     .option('--out <file>', 'cli.opt.exportOut')
     .option('--overwrite', 'cli.opt.overwrite')
     .actionCtx(async (options, _args, ctx) => {
@@ -306,11 +306,12 @@ cli
             return 2;
         }
         const requested = text(options, 'format') ?? 'pptx';
-        if (requested !== 'pptx' && requested !== 'ppsx' && requested !== 'potx') {
+        if (requested !== 'pptx' && requested !== 'ppsx' && requested !== 'potx' && requested !== 'pdf') {
             ctx.fail('open-ppt.cli.format-unsupported', { message: `\`${requested}\` is not a supported export target` });
             return 2;
         }
-        const format: ExportFormat = requested === 'ppsx' ? 'ppsx' : requested === 'potx' ? 'potx' : 'pptx';
+        const format: ExportFormat =
+            requested === 'ppsx' ? 'ppsx' : requested === 'potx' ? 'potx' : requested === 'pdf' ? 'pdf' : 'pptx';
         const opened = service.open(file);
         try {
             const report = service.exportDeck(opened.handle, {

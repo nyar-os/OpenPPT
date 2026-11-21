@@ -13,15 +13,21 @@ editable deck model to the following operations:
   `undo`/`redo` and static playback.
 - `render({ format: 'svg' })` returns one standalone SVG page per slide.
 - `export({ format: 'pptx' | 'ppsx' | 'potx' })` writes an editable
-  PresentationML package, including tables and picture assets.
-- `importPptx(path)` carries text, placeholders, pictures, preset shapes and
-  tables. Refused constructs are listed on `deck.importLosses` with stable
-  `import.pptx.*` codes instead of being faked.
+  PresentationML package, including tables, picture assets, slide backgrounds
+  and speaker notes.
+- `export({ format: 'pdf' })` writes a static PDF 1.7 projection with
+  backgrounds, shapes, text, tables and JPEG pictures.
+- `importPptx(path)` carries text, placeholders, pictures, preset shapes,
+  tables, slide backgrounds and speaker notes. Refused constructs are listed on
+  `deck.importLosses` with stable `import.pptx.*` codes instead of being faked.
 - `capabilities()` reports the real matrix. Anything not wired is
   `unsupported`, or `partial` with its loss codes.
 
-PPTX import and export remain `partial`: charts, SmartArt, OLE objects, media,
-groups and slide backgrounds are skipped and reported. PNG/PDF rendering,
+PPTX import and export remain `partial`: charts, SmartArt, OLE objects, media
+and groups are skipped and reported, and non-solid backgrounds are flattened to
+an explicit no-fill with a loss code. PDF export is `partial`: only JPEG
+pictures are embedded, characters outside Latin-1 become `?`, and charts,
+formulas, media and groups are reported instead of painted. PNG/PDF rendering,
 timed builds, transitions and media playback are not implemented.
 
 ## Boundaries

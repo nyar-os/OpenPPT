@@ -6,7 +6,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -48,7 +48,7 @@ test('capabilities mirror the native matrix instead of a local guess', { skip },
     assert.equal(matrix.renderers.png, 'unsupported');
     assert.equal(matrix.exportTargets.pptx, 'partial');
     assert.equal(matrix.exportTargets.ppsx, 'partial');
-    assert.equal(matrix.exportTargets.pdf, 'unsupported');
+    assert.equal(matrix.exportTargets.pdf, 'partial');
     assert.ok(!matrix.exportLossCodes.pptx.includes('table'), 'tables are no longer an export loss');
 });
 
@@ -234,10 +234,14 @@ test('render and export answer with real pages and a real package', { skip }, as
     assert.ok(exported.bytes > 0);
     assert.ok(existsSync(target));
 
-    await assert.rejects(
-        deck.export({ format: 'pdf', target: join(dir, 'deck.pdf') }),
-        (error) => isOpenPPTError(error) && error.code === 'capability/not-implemented',
-    );
+    const pdfTarget = join(dir, 'deck.pdf');
+    const pdf = await deck.export({ format: 'pdf', target: pdfTarget });
+    assert.equal(pdf.format, 'pdf');
+    assert.equal(pdf.target, pdfTarget);
+    assert.equal(pdf.editable, false);
+    assert.ok(pdf.bytes > 0);
+    assert.ok(readFileSync(pdfTarget).subarray(0, 8).toString('latin1').startsWith('%PDF-1.7'));
+    assert.ok(existsSync(pdfTarget));
     await ppt.dispose();
 });
 

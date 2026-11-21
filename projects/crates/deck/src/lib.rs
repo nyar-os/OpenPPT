@@ -10,6 +10,7 @@
 pub mod edit;
 pub mod export;
 pub mod import;
+mod pdf;
 pub mod pptx;
 pub mod render;
 
@@ -73,12 +74,13 @@ impl From<io::Error> for ServiceError {
 ///
 /// The matrix only claims what is wired: the native project container, editing,
 /// saving, static playback, the implemented rule checks, PresentationML
-/// playback, editable PresentationML import, PresentationML export and per-page
-/// SVG rendering. PPTX import, edit and export stay `partial` because charts,
-/// SmartArt, OLE objects, media and groups are refused or dropped with stable
-/// codes instead of being faked, and a slide background has no editable slot.
-/// PNG/PDF rendering, timed builds, transitions and media playback stay
-/// `unsupported`.
+/// playback, editable PresentationML import, PresentationML export, per-page
+/// SVG rendering and a static PDF export. PPTX import, edit and export stay
+/// `partial` because charts, SmartArt, OLE objects, media and groups are refused
+/// or dropped with stable codes instead of being faked. PDF export is `partial`
+/// because pictures other than JPEG, non-Latin glyphs, charts, formulas, media
+/// and groups are reported rather than painted. PNG rendering, timed builds,
+/// transitions and media playback stay `unsupported`.
 pub fn capabilities() -> Value {
     let mut formats = Map::new();
     for format in PRESENTATION_FORMATS {
@@ -116,12 +118,12 @@ pub fn capabilities() -> Value {
             "out-of-bounds": "supported",
         },
         "renderers": { "svg": "supported", "png": "unsupported", "pdf": "unsupported" },
-        "exportTargets": { "pptx": "partial", "ppsx": "partial", "potx": "partial", "pdf": "unsupported", "odp": "unsupported" },
+        "exportTargets": { "pptx": "partial", "ppsx": "partial", "potx": "partial", "pdf": "partial", "odp": "unsupported" },
         "exportLossCodes": {
             "pptx": [export::LOSS_CHART, export::LOSS_FORMULA, export::LOSS_MEDIA, export::LOSS_GROUP, export::LOSS_IMAGE],
             "ppsx": [export::LOSS_CHART, export::LOSS_FORMULA, export::LOSS_MEDIA, export::LOSS_GROUP, export::LOSS_IMAGE],
             "potx": [export::LOSS_CHART, export::LOSS_FORMULA, export::LOSS_MEDIA, export::LOSS_GROUP, export::LOSS_IMAGE],
-            "pdf": [],
+            "pdf": [pdf::LOSS_IMAGE, pdf::LOSS_GLYPH, pdf::LOSS_CHART, pdf::LOSS_FORMULA, pdf::LOSS_MEDIA, pdf::LOSS_GROUP],
             "odp": [],
         },
         "playback": { "staticSlides": "supported", "builds": "unsupported", "transitions": "unsupported", "media": "unsupported" },
@@ -239,9 +241,10 @@ pub fn render(deck: &Deck) -> Result<Value, ServiceError> {
     render::render(deck)
 }
 
-/// Writes the deck as a PresentationML package and reports what it dropped.
+/// Writes the deck as a PresentationML package or a static PDF and reports what
+/// it dropped.
 ///
-/// The request carries `format` (`pptx`, `ppsx` or `potx`), `target`,
+/// The request carries `format` (`pptx`, `ppsx`, `potx` or `pdf`), `target`,
 /// `overwrite` and an optional `lossPolicy`.
 pub fn export(deck: &Deck, request: &Value) -> Result<Value, ServiceError> {
     export::export(deck, request)
