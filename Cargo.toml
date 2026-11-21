@@ -18,17 +18,17 @@ repository = "https://github.com/nyar-os/OpenPPT"
 wae = { git = "https://github.com/doki-land/wae-framework.git", rev = "f92f818fde7174154d77a87b55a5e44b367034c9", default-features = false, features = ["webview"] }
 
 # Editable deck model. It lives upstream in Boost; this repository only binds it.
-document-presentation = { git = "https://github.com/oovm/rust-boost", rev = "1889797482ba4bc0480aca54aa08fef0895fd570" }
-document-presentation-pdf = { git = "https://github.com/oovm/rust-boost", rev = "1889797482ba4bc0480aca54aa08fef0895fd570" }
-document-presentation-pptx = { git = "https://github.com/oovm/rust-boost", rev = "1889797482ba4bc0480aca54aa08fef0895fd570" }
+document-presentation = { git = "https://github.com/oovm/rust-boost", rev = "ad76d3060dc8c0e219ba1016f88bf5ab905d48d9" }
+document-presentation-pdf = { git = "https://github.com/oovm/rust-boost", rev = "ad76d3060dc8c0e219ba1016f88bf5ab905d48d9" }
+document-presentation-pptx = { git = "https://github.com/oovm/rust-boost", rev = "ad76d3060dc8c0e219ba1016f88bf5ab905d48d9" }
 # PresentationML import and the fixed-canvas slide view used by PPTX playback.
 # Only the `pptx` feature is enabled so unrelated format adapters stay out.
-document-formats = { git = "https://github.com/oovm/rust-boost", rev = "1889797482ba4bc0480aca54aa08fef0895fd570", default-features = false, features = ["pptx"] }
-boost-fs = { git = "https://github.com/oovm/rust-boost", rev = "1889797482ba4bc0480aca54aa08fef0895fd570", default-features = false }
-data-encoding = { git = "https://github.com/oovm/rust-boost", rev = "1889797482ba4bc0480aca54aa08fef0895fd570" }
+document-formats = { git = "https://github.com/oovm/rust-boost", rev = "ad76d3060dc8c0e219ba1016f88bf5ab905d48d9", default-features = false, features = ["pptx"] }
+boost-fs = { git = "https://github.com/oovm/rust-boost", rev = "ad76d3060dc8c0e219ba1016f88bf5ab905d48d9", default-features = false }
+data-encoding = { git = "https://github.com/oovm/rust-boost", rev = "ad76d3060dc8c0e219ba1016f88bf5ab905d48d9" }
 serde_json = "1"
 # ZIP container writer used to assemble PresentationML packages.
-data-binary-zip = { git = "https://github.com/oovm/rust-boost", rev = "1889797482ba4bc0480aca54aa08fef0895fd570" }
+data-binary-zip = { git = "https://github.com/oovm/rust-boost", rev = "ad76d3060dc8c0e219ba1016f88bf5ab905d48d9" }
 
 [profile.release]
 lto = true
