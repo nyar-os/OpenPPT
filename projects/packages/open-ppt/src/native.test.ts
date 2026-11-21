@@ -6,7 +6,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -31,7 +31,8 @@ test('capabilities mirror the native matrix instead of a local guess', { skip },
         project: { import: string; playback: string };
         formats: { pptx: { import: string } };
         checks: { contrast: string; overflow: string };
-        renderers: { svg: string };
+        renderers: { svg: string; png: string };
+        exportTargets: { pptx: string; ppsx: string; pdf: string };
         playback: { staticSlides: string };
     };
 
@@ -41,7 +42,11 @@ test('capabilities mirror the native matrix instead of a local guess', { skip },
     assert.equal(matrix.checks.contrast, 'supported');
     assert.equal(matrix.checks.overflow, 'unsupported');
     assert.equal(matrix.formats.pptx.import, 'partial');
-    assert.equal(matrix.renderers.svg, 'partial');
+    assert.equal(matrix.renderers.svg, 'supported');
+    assert.equal(matrix.renderers.png, 'unsupported');
+    assert.equal(matrix.exportTargets.pptx, 'partial');
+    assert.equal(matrix.exportTargets.ppsx, 'partial');
+    assert.equal(matrix.exportTargets.pdf, 'unsupported');
 });
 
 test('create, save and reopen keep one handle per deck', { skip }, async () => {
@@ -182,6 +187,54 @@ test('undo, redo and embedded assets stay consistent', { skip }, async () => {
     assert.equal(image.kind, 'image');
     assert.equal((await slide.elements.get(image.id)).alt, 'Dot');
     assert.equal((await deck.assets.list()).length, 1);
+    await ppt.dispose();
+});
+
+test('render and export answer with real pages and a real package', { skip }, async () => {
+    const ppt = new OpenPPT();
+    const deck = await ppt.create({ title: 'Render', size: { widthPt: 960, heightPt: 540 } });
+    const slide = await deck.slides.add();
+    await slide.title.set('Welcome');
+    await slide.elements.addText({
+        text: {
+            paragraphs: [{ runs: [{ text: 'Hello <OpenPPT>', bold: true, sizePt: 24, color: '#ff0000' }], align: 'center' }],
+        },
+        transform: { xPt: 60, yPt: 60, widthPt: 400, heightPt: 80 },
+        alt: 'Greeting',
+    });
+    await slide.elements.addShape({
+        geometry: 'ellipse',
+        transform: { xPt: 60, yPt: 180, widthPt: 200, heightPt: 120 },
+        fill: '#00ff00',
+    });
+
+    const dir = mkdtempSync(join(tmpdir(), 'open-ppt-render-'));
+    const render = await deck.render({ format: 'svg', target: dir });
+    assert.equal(render.format, 'svg');
+    assert.equal(render.pages.length, 1);
+    const [page] = render.pages;
+    assert.ok(page);
+    assert.equal(page.index, 0);
+    assert.equal(Math.round(page.widthPx), 1280);
+    assert.equal(Math.round(page.heightPx), 720);
+    assert.ok(page.svg.startsWith('<svg'));
+    assert.ok(page.svg.includes('Hello &lt;OpenPPT&gt;'), 'text must be XML escaped');
+    assert.ok(page.svg.includes('<ellipse'));
+    assert.ok(page.path !== undefined && existsSync(page.path));
+    assert.equal(page.bytes, Buffer.byteLength(page.svg));
+
+    const target = join(dir, 'deck.pptx');
+    const exported = await deck.export({ format: 'pptx', target });
+    assert.equal(exported.format, 'pptx');
+    assert.equal(exported.target, target);
+    assert.equal(exported.editable, true);
+    assert.ok(exported.bytes > 0);
+    assert.ok(existsSync(target));
+
+    await assert.rejects(
+        deck.export({ format: 'pdf', target: join(dir, 'deck.pdf') }),
+        (error) => isOpenPPTError(error) && error.code === 'capability/not-implemented',
+    );
     await ppt.dispose();
 });
 

@@ -17,26 +17,42 @@ graph LR
     F[UI (VMZ)] --> B
 ```
 
+## Capabilities
+
+The engine reports what it can actually do; `open-ppt capabilities` is the
+source of truth. This build wires:
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Native project | supported | create, edit, undo/redo, save, static playback |
+| PPTX import and playback | partial | charts, SmartArt, OLE objects, media, groups and tables are refused or reported with stable loss codes |
+| PPTX / PPSX / POTX export | partial | text, preset shapes, pictures and slide backgrounds are written; tables, charts, formulas, media and groups are skipped and reported |
+| SVG rendering | supported | one standalone SVG page per slide |
+| PNG / PDF rendering | unsupported | needs a raster backend this build does not ship |
+| Timed builds, transitions, media playback | unsupported | the static model has no timeline |
+
+Losses are returned as data (`losses` with a stable `code`), never as invisible
+approximations. An export with `lossPolicy: 'error'` refuses to write when
+anything would be dropped.
+
 ## What's NOT here
 
-- **No `.pptx` parser or writer implementation** — OOXML parse, slide layout, theme model, codecs and export live in the shared processing engine.
+- **No full OOXML engine** — parsing, layout math, text shaping and playback live in the shared processing engine. This repo adds a small PresentationML package writer on top of the deck model.
 - **No slide or deck algorithms** — master/layout inheritance, timeline math, overflow detection and contrast checks belong upstream.
 - **No fixture corpus** — golden `.pptx` files, visual baselines, and heavyweight acceptance suites live downstream. This repo keeps minimal smoke-level tests only.
 - **No second deck model** — playback, editing and agent authoring consume the same project revision. There is no "playback deck" vs. "authoring deck" split.
 - **No algorithms in the skills package** — it ships skill documents only.
 
-## 🚀 Usage (declared surface)
-
-The authoring surface is declared; no capability is wired yet. Every call below
-rejects with `capability/not-implemented`, so examples never pretend to succeed:
+## 🚀 Usage
 
 ```bash
 open-ppt capabilities
-open-ppt create --title "Research review" --size 16:9
-open-ppt open deck.pptx
-open-ppt inspect deck.pptx
-open-ppt render deck.pptx --format png --out-dir slides/
-open-ppt export deck.pptx --format pptx -o output.pptx
+open-ppt create --title "Research review" --size 16:9 --out deck.project
+open-ppt open deck.project
+open-ppt inspect deck.project
+open-ppt render deck.project --format svg --out slides/
+open-ppt export deck.project --format pptx --out output.pptx --overwrite
+open-ppt play deck.pptx
 ```
 
 ```ts
@@ -44,7 +60,8 @@ import { OpenPPT } from '@wae/open-ppt';
 
 const ppt = new OpenPPT();
 const deck = await ppt.create({ title: 'Research review', size: '16:9', theme: 'editorial-light' });
-await deck.slides.add({ layout: 'title-and-chart' });
+await deck.slides.add();
+await deck.render({ format: 'svg', target: 'slides/' });
 await deck.export({ format: 'pptx', target: 'output.pptx' });
 await ppt.dispose();
 ```
@@ -55,7 +72,7 @@ await ppt.dispose();
 OpenPPT/
 ├── projects/
 │   ├── crates/
-│   │   ├── app/                   # Native host / CLI entry
+│   │   ├── deck/                  # Deck model, editor, SVG renderer, PPTX writer
 │   │   └── napi/                  # Node-API binding (thin value mapping)
 │   ├── packages/
 │   │   ├── open-ppt/              # CLI + SDK entry point
@@ -70,5 +87,3 @@ OpenPPT/
 ├── package.json
 └── pnpm-workspace.yaml
 ```
-
-This is a scaffold repo. The processing engine wiring, CLI binary, and runtime entry points are added incrementally as the shared engine lands.
