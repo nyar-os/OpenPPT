@@ -111,6 +111,25 @@ fn text(ctx: &CallContext, index: usize) -> Result<String> {
     argument(ctx, index)?.as_string()
 }
 
+/// Reads an optional JSON request argument; an absent value becomes `null`.
+fn optional_json(ctx: &CallContext, index: usize) -> Result<Value> {
+    match ctx.args().get(index) {
+        Some(value) if !value.is_undefined()? => {
+            let raw = value.as_string()?;
+            serde_json::from_str(&raw).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))
+        }
+        _ => Ok(Value::Null),
+    }
+}
+
+/// Rejects render formats this build cannot paint.
+fn check_render_format(request: &Value) -> Result<()> {
+    match request.get("format").and_then(Value::as_str) {
+        None | Some("svg") => Ok(()),
+        Some(other) => Err(Error::new(format!("capability/not-implemented: the `{other}` renderer is not implemented yet"))),
+    }
+}
+
 fn handle(ctx: &CallContext, index: usize) -> Result<u64> {
     let raw = argument(ctx, index)?.as_i64()?;
     u64::try_from(raw).map_err(|_| Error::new("session/argument-invalid: the deck handle must be a non-negative integer"))
@@ -302,6 +321,31 @@ fn deck_close(ctx: CallContext) -> Result<JsValue> {
     ctx.env().boolean(true)
 }
 
+/// Renders every slide of one open deck to a standalone SVG document.
+///
+/// The optional second argument is a JSON request; only `{"format":"svg"}` is
+/// served and every other format is refused instead of being approximated.
+#[function]
+fn deck_render(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = optional_json(&ctx, 1)?;
+    check_render_format(&request)?;
+    let report = with_deck(handle, open_ppt_deck::render)?.map_err(fail)?;
+    respond(&ctx, &report)
+}
+
+/// Writes one open deck as a PresentationML package.
+///
+/// The request is JSON and carries `format`, `target`, `overwrite` and an
+/// optional `lossPolicy`.
+#[function]
+fn deck_export(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = optional_json(&ctx, 1)?;
+    let report = with_deck(handle, |deck| open_ppt_deck::export(deck, &request))?.map_err(fail)?;
+    respond(&ctx, &report)
+}
+
 /// Imports a PresentationML package and renders every visible slide.
 ///
 /// The reply is `{ handle, presentation }`, where `presentation` carries the
@@ -448,6 +492,20 @@ impl IpcHandler for DeckIpcHandler {
                     Err(message) => failure(id, "historyError", message),
                 }
             }
+            "deck.render" => {
+                let request = value.get("request").cloned().unwrap_or(Value::Null);
+                match call_render(handle_of(&value), &request) {
+                    Ok(report) => reply(id, "renderResult", json!({ "report": report })),
+                    Err(message) => failure(id, "renderError", message),
+                }
+            }
+            "deck.export" => {
+                let request = value.get("request").cloned().unwrap_or(Value::Null);
+                match call_export(handle_of(&value), &request) {
+                    Ok(report) => reply(id, "exportResult", json!({ "report": report })),
+                    Err(message) => failure(id, "exportError", message),
+                }
+            }
             "deck.close" => {
                 let handle = handle_of(&value);
                 if remove(handle) {
@@ -576,6 +634,15 @@ fn call_edit(handle: u64, request: &Value) -> std::result::Result<Value, String>
         Ok(Err(error)) => Err(service_failure(error)),
         Err(error) => Err(error.to_string()),
     }
+}
+
+fn call_render(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    check_render_format(request).map_err(|error| error.to_string())?;
+    deck_service_call(handle, open_ppt_deck::render)
+}
+
+fn call_export(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    deck_service_call(handle, |deck| open_ppt_deck::export(deck, request))
 }
 
 fn call_pptx_open(path: &str) -> std::result::Result<Value, String> {
@@ -847,6 +914,8 @@ register_module![
     deck_asset,
     deck_undo,
     deck_redo,
+    deck_render,
+    deck_export,
     deck_close,
     pptx_open,
     pptx_slide,
