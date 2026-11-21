@@ -204,6 +204,20 @@ fn deck_open(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &json!({ "handle": handle, "deck": summary }))
 }
 
+/// Imports a PresentationML package as an editable deck.
+///
+/// The reply is `{ handle, deck, losses }`. The deck is registered in the same
+/// store as created and opened decks, so it can be edited, rendered and saved.
+#[function]
+fn deck_import_pptx(ctx: CallContext) -> Result<JsValue> {
+    let path = text(&ctx, 0)?;
+    let outcome = open_ppt_deck::import_pptx(Path::new(&path)).map_err(fail)?;
+    let summary = open_ppt_deck::summary(&outcome.deck);
+    let losses = outcome.losses;
+    let handle = insert(outcome.deck);
+    respond(&ctx, &json!({ "handle": handle, "deck": summary, "losses": losses }))
+}
+
 /// Returns the summary of one open deck.
 #[function]
 fn deck_summary(ctx: CallContext) -> Result<JsValue> {
@@ -904,6 +918,7 @@ register_module![
     capabilities,
     deck_create,
     deck_open,
+    deck_import_pptx,
     deck_summary,
     deck_save,
     deck_inspect,
