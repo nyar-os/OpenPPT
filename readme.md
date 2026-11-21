@@ -24,7 +24,7 @@ source of truth. This build wires:
 
 | Area | Status | Notes |
 | --- | --- | --- |
-| Native project | supported | create, JSON edit scripts (slides, elements and assets), undo/redo, save, static playback |
+| Native project | supported | create, JSON edit scripts (slides, elements, element alignment and distribution, assets), undo/redo, save, static playback |
 | PPTX import and playback | partial | `.pptx`-family packages open as editable decks: text, placeholders, pictures, preset shapes, tables and slide backgrounds are carried. Charts, SmartArt, OLE objects, media and groups are refused or reported with stable loss codes |
 | PPTX / PPSX / POTX export | partial | text, preset shapes, pictures, tables and slide backgrounds are written; charts, formulas, media and groups are skipped and reported |
 | SVG rendering | supported | one standalone SVG page per slide |
@@ -52,6 +52,9 @@ open-ppt create --title "Research review" --size 16:9 --theme default --out deck
 open-ppt open deck.project
 open-ppt import slides.pptx --out deck.project
 open-ppt edit deck.project --ops '[{"op":"slide.add"}]' --out deck.project --overwrite
+open-ppt edit deck.project --ops '[{"op":"element.align","slideId":"slide-1","elementIds":["element-1","element-2"],"edge":"left"}]'
+open-ppt edit deck.project --ops '[{"op":"element.align","slideId":"slide-1","elementIds":["element-1","element-2"],"edge":"center","relativeTo":"selection"}]'
+open-ppt edit deck.project --ops '[{"op":"element.distribute","slideId":"slide-1","elementIds":["element-1","element-2","element-3"],"axis":"horizontal"}]'
 open-ppt edit deck.project --script edits.json --expected-revision 3 --out deck.project --overwrite
 open-ppt slide deck.project <slideId>
 open-ppt assets deck.project
@@ -66,6 +69,14 @@ open-ppt play deck.pptx
 `--script` accepts either an operations array or a full edit request
 (`{ "operations": [...], "expectedRevision": 3 }`), so a script can pin the
 revision it was written against. A failed edit writes no output file.
+
+`element.align` pins one or more boxes to `left`, `center`, `right`, `top`,
+`middle` or `bottom` of the slide (default) or of the selection's joint
+bounding box (`"relativeTo": "selection"`). `element.distribute` needs at least
+three boxes and equalises the gaps on `horizontal` or `vertical` while keeping
+the first and last box in place. Both only change `x`/`y`, never sizes or
+rotation, and run through the same draft, revision and undo path as every
+other operation.
 
 ```ts
 import { OpenPPT } from '@wae/open-ppt';

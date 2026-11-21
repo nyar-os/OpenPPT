@@ -326,11 +326,51 @@ export interface LockFlags {
     readonly remove?: boolean;
 }
 
-/** Alignment commands for `ElementsApi.align()`. */
-export type Alignment = 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom';
+/** Edge an element box is pinned to by `ElementsApi.align()`. */
+export type AlignEdge = 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom';
+
+/** Reference frame of an alignment run. Defaults to `slide`. */
+export type AlignReference = 'slide' | 'selection';
+
+/** Axis `ElementsApi.distribute()` spaces elements along. */
+export type DistributeAxis = 'horizontal' | 'vertical';
 
 /** Stacking commands for `ElementsApi.zOrder()`. */
 export type ZOrder = 'front' | 'back' | 'forward' | 'backward';
+
+/**
+ * Edit operation that pins the selected boxes to one edge of the slide or of
+ * their joint bounding box.
+ *
+ * `relativeTo` defaults to `slide`. Only `x`/`y` change, so sizes and rotation
+ * stay untouched. Empty, duplicate or unknown element ids and unknown edges
+ * answer with `session/argument-invalid`; a missing slide answers with
+ * `object/not-found`.
+ */
+export interface ElementAlignOperation {
+    readonly op: 'element.align';
+    readonly slideId: SlideId;
+    readonly elementIds: readonly ElementId[];
+    readonly edge: AlignEdge;
+    readonly relativeTo?: AlignReference;
+}
+
+/**
+ * Edit operation that keeps the first and last box fixed and spaces the rest
+ * with equal gaps between their outer boundaries.
+ *
+ * At least three element ids are required. Only the position on `axis` changes,
+ * so sizes and the other axis stay untouched.
+ */
+export interface ElementDistributeOperation {
+    readonly op: 'element.distribute';
+    readonly slideId: SlideId;
+    readonly elementIds: readonly ElementId[];
+    readonly axis: DistributeAxis;
+}
+
+/** Placement and stacking operations addressed to elements of one slide. */
+export type ElementOperation = ElementReorderOperation | ElementAlignOperation | ElementDistributeOperation;
 
 /**
  * Edit operation that moves one element to a zero-based paint index.
@@ -369,8 +409,8 @@ export interface ElementsApi {
     update(elementId: ElementId, patch: ElementPatch): Promise<Element>;
     remove(elementId: ElementId): Promise<void>;
     group(elementIds: readonly ElementId[], options?: { readonly alt?: string }): Promise<Element>;
-    align(elementIds: readonly ElementId[], alignment: Alignment): Promise<void>;
-    distribute(elementIds: readonly ElementId[], axis: 'horizontal' | 'vertical'): Promise<void>;
+    align(elementIds: readonly ElementId[], edge: AlignEdge, options?: { readonly relativeTo?: AlignReference }): Promise<void>;
+    distribute(elementIds: readonly ElementId[], axis: DistributeAxis): Promise<void>;
     zOrder(elementId: ElementId, order: ZOrder): Promise<void>;
     lock(elementId: ElementId, flags: LockFlags): Promise<void>;
 }

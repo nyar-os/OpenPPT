@@ -18,6 +18,8 @@ import { searchSlides } from './search.js';
 import * as service from './service.js';
 import type { DeckHandle, DeckSummary } from './service.js';
 import type {
+    AlignEdge,
+    AlignReference,
     AssetId,
     AssetInfo,
     AssetInput,
@@ -29,6 +31,7 @@ import type {
     DeckId,
     DeckOutline,
     DeckTransaction,
+    DistributeAxis,
     Element,
     ElementId,
     ElementKind,
@@ -675,16 +678,20 @@ class ElementsView {
         throw new OpenPPTError('object/unsupported', 'groups are not editable yet', { details: { feature: 'elements.group' } });
     }
 
-    async align(): Promise<void> {
-        throw new OpenPPTError('object/unsupported', 'alignment commands need the layout engine', {
-            details: { feature: 'elements.align' },
-        });
+    async align(
+        elementIds: readonly ElementId[],
+        edge: AlignEdge,
+        options?: { readonly relativeTo?: AlignReference },
+    ): Promise<void> {
+        assertElementIds(elementIds, 'elements.align', 1);
+        this.deck.apply([
+            { op: 'element.align', slideId: this.slideId, elementIds, edge, relativeTo: options?.relativeTo },
+        ]);
     }
 
-    async distribute(): Promise<void> {
-        throw new OpenPPTError('object/unsupported', 'distribution commands need the layout engine', {
-            details: { feature: 'elements.distribute' },
-        });
+    async distribute(elementIds: readonly ElementId[], axis: DistributeAxis): Promise<void> {
+        assertElementIds(elementIds, 'elements.distribute', 3);
+        this.deck.apply([{ op: 'element.distribute', slideId: this.slideId, elementIds, axis }]);
     }
 
     async zOrder(elementId: ElementId, order: ZOrder): Promise<void> {
@@ -890,6 +897,22 @@ function elementView(element: service.ElementDetail): Element {
         alt: element.alt,
         locked: element.locked,
     };
+}
+
+function assertElementIds(elementIds: readonly ElementId[], feature: string, minimum: number): void {
+    if (elementIds.length < minimum) {
+        throw new OpenPPTError('session/argument-invalid', `\`${feature}\` needs at least ${minimum} element ids`);
+    }
+    const seen = new Set<ElementId>();
+    for (const id of elementIds) {
+        if (typeof id !== 'string' || id.length === 0) {
+            throw new OpenPPTError('session/argument-invalid', 'element ids must be non-empty strings');
+        }
+        if (seen.has(id)) {
+            throw new OpenPPTError('session/argument-invalid', `element \`${id}\` appears twice`);
+        }
+        seen.add(id);
+    }
 }
 
 function plainText(text: TextInput, feature: string): string {

@@ -4,7 +4,7 @@
 //! in authoring units (points, CSS colours, base64 bytes) and are mapped to the
 //! upstream model here; deck semantics and revision handling stay upstream.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use data_encoding::representation::Base64;
 
@@ -418,6 +418,21 @@ impl EditState {
                 draft.update_transform(&slide, &element, required_transform(operation)?)?;
                 None
             }
+            "element.align" => {
+                let slide = self.slide(operation)?;
+                let elements = self.element_list(operation, "elementIds", 1)?;
+                let edge = parse_align_edge(required_str(operation, "edge")?)?;
+                let relative_to = parse_relative_to(operation)?;
+                align_elements(draft, &slide, &elements, edge, relative_to)?;
+                None
+            }
+            "element.distribute" => {
+                let slide = self.slide(operation)?;
+                let elements = self.element_list(operation, "elementIds", 3)?;
+                let axis = parse_distribute_axis(required_str(operation, "axis")?)?;
+                distribute_elements(draft, &slide, &elements, axis)?;
+                None
+            }
             "element.updateAlt" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
@@ -544,6 +559,26 @@ impl EditState {
         ElementId::new(self.resolve_value(raw)?).ok_or_else(|| invalid("element identity must not be empty"))
     }
 
+    /// Reads a non-empty, duplicate-free element list and resolves transaction tokens.
+    fn element_list(&self, operation: &Value, key: &str, minimum: usize) -> Result<Vec<ElementId>, DeckError> {
+        let values = array(operation, key)?;
+        if values.len() < minimum {
+            return Err(invalid(format!("`{key}` needs at least {minimum} element ids")));
+        }
+        let mut seen = BTreeSet::new();
+        let mut elements = Vec::with_capacity(values.len());
+        for value in values {
+            let raw = value.as_str().ok_or_else(|| invalid(format!("`{key}` must list element ids")))?;
+            let resolved = self.resolve_value(raw)?;
+            if !seen.insert(resolved.clone()) {
+                return Err(invalid(format!("element `{resolved}` appears twice in `{key}`")));
+            }
+            let id = ElementId::new(resolved).ok_or_else(|| invalid("element identity must not be empty"))?;
+            elements.push(id);
+        }
+        Ok(elements)
+    }
+
     fn resolve_value(&self, raw: &str) -> Result<String, DeckError> {
         if !raw.starts_with("$tx:") {
             return Ok(raw.to_string());
@@ -656,6 +691,204 @@ fn required_transform(operation: &Value) -> Result<Transform, DeckError> {
         .ok_or_else(|| invalid("transform values must be finite point numbers"))?;
     transform.rotation_deg = value.get("rotationDeg").and_then(Value::as_f64);
     Ok(transform)
+}
+
+/// One alignment edge; only the axis that belongs to it moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AlignEdge {
+    Left,
+    Center,
+    Right,
+    Top,
+    Middle,
+    Bottom,
+}
+
+fn parse_align_edge(value: &str) -> Result<AlignEdge, DeckError> {
+    Ok(match value {
+        "left" => AlignEdge::Left,
+        "center" => AlignEdge::Center,
+        "right" => AlignEdge::Right,
+        "top" => AlignEdge::Top,
+        "middle" => AlignEdge::Middle,
+        "bottom" => AlignEdge::Bottom,
+        other => {
+            return Err(invalid(format!(
+                "`edge` must be `left`, `center`, `right`, `top`, `middle` or `bottom`, not `{other}`"
+            )));
+        }
+    })
+}
+
+/// Reference frame of an alignment run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RelativeTo {
+    Slide,
+    Selection,
+}
+
+fn parse_relative_to(operation: &Value) -> Result<RelativeTo, DeckError> {
+    match operation.get("relativeTo") {
+        None | Some(Value::Null) => Ok(RelativeTo::Slide),
+        Some(Value::String(value)) if value == "slide" => Ok(RelativeTo::Slide),
+        Some(Value::String(value)) if value == "selection" => Ok(RelativeTo::Selection),
+        Some(_) => Err(invalid("`relativeTo` must be `slide` or `selection`")),
+    }
+}
+
+/// Axis along which elements are distributed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DistributeAxis {
+    Horizontal,
+    Vertical,
+}
+
+fn parse_distribute_axis(value: &str) -> Result<DistributeAxis, DeckError> {
+    match value {
+        "horizontal" => Ok(DistributeAxis::Horizontal),
+        "vertical" => Ok(DistributeAxis::Vertical),
+        other => Err(invalid(format!("`axis` must be `horizontal` or `vertical`, not `{other}`"))),
+    }
+}
+
+impl DistributeAxis {
+    fn start(self, transform: &Transform) -> i64 {
+        match self {
+            Self::Horizontal => transform.x_emu,
+            Self::Vertical => transform.y_emu,
+        }
+    }
+
+    fn set_start(self, transform: &mut Transform, value: i64) {
+        match self {
+            Self::Horizontal => transform.x_emu = value,
+            Self::Vertical => transform.y_emu = value,
+        }
+    }
+
+    fn size(self, transform: &Transform) -> i64 {
+        match self {
+            Self::Horizontal => transform.width_emu,
+            Self::Vertical => transform.height_emu,
+        }
+    }
+}
+
+/// Frame positions are computed from one snapshot, then written in one pass.
+#[derive(Debug, Clone, Copy)]
+struct Bounds {
+    x: i64,
+    y: i64,
+    width: i64,
+    height: i64,
+}
+
+fn missing_slide(slide: &SlideId) -> DeckError {
+    DeckError::new(codes::OBJECT_NOT_FOUND, format!("slide `{slide}` does not exist")).with_slide(slide.clone())
+}
+
+fn unknown_element(slide: &SlideId, element: &ElementId) -> DeckError {
+    invalid(format!("element `{element}` does not exist on this slide")).with_slide(slide.clone()).with_element(element.clone())
+}
+
+fn element_frames(draft: &DeckEdit, slide: &SlideId, elements: &[ElementId]) -> Result<Vec<Transform>, DeckError> {
+    let model = draft.document().slide(slide).ok_or_else(|| missing_slide(slide))?;
+    elements
+        .iter()
+        .map(|id| model.element(id).map(|element| element.transform).ok_or_else(|| unknown_element(slide, id)))
+        .collect()
+}
+
+fn selection_bounds(frames: &[Transform]) -> Bounds {
+    let mut x = i64::MAX;
+    let mut y = i64::MAX;
+    let mut right = i64::MIN;
+    let mut bottom = i64::MIN;
+    for transform in frames {
+        x = x.min(transform.x_emu);
+        y = y.min(transform.y_emu);
+        right = right.max(transform.x_emu.saturating_add(transform.width_emu));
+        bottom = bottom.max(transform.y_emu.saturating_add(transform.height_emu));
+    }
+    Bounds { x, y, width: right.saturating_sub(x), height: bottom.saturating_sub(y) }
+}
+
+/// Aligns the selected boxes to the slide or to their joint bounding box.
+fn align_elements(
+    draft: &mut DeckEdit,
+    slide: &SlideId,
+    elements: &[ElementId],
+    edge: AlignEdge,
+    relative_to: RelativeTo,
+) -> Result<(), DeckError> {
+    let frames = element_frames(draft, slide, elements)?;
+    let bounds = match relative_to {
+        RelativeTo::Slide => {
+            let size = draft.document().size;
+            Bounds { x: 0, y: 0, width: size.width_emu, height: size.height_emu }
+        }
+        RelativeTo::Selection => selection_bounds(&frames),
+    };
+    let updates = elements
+        .iter()
+        .zip(frames)
+        .map(|(id, transform)| {
+            let mut next = transform;
+            match edge {
+                AlignEdge::Left => next.x_emu = bounds.x,
+                AlignEdge::Center => next.x_emu = bounds.x + (bounds.width - next.width_emu) / 2,
+                AlignEdge::Right => next.x_emu = bounds.x + bounds.width - next.width_emu,
+                AlignEdge::Top => next.y_emu = bounds.y,
+                AlignEdge::Middle => next.y_emu = bounds.y + (bounds.height - next.height_emu) / 2,
+                AlignEdge::Bottom => next.y_emu = bounds.y + bounds.height - next.height_emu,
+            }
+            (id.clone(), next)
+        })
+        .collect::<Vec<_>>();
+    for (id, transform) in updates {
+        draft.update_transform(slide, &id, transform)?;
+    }
+    Ok(())
+}
+
+/// Spaces the middle boxes evenly between the fixed first and last boxes.
+fn distribute_elements(
+    draft: &mut DeckEdit,
+    slide: &SlideId,
+    elements: &[ElementId],
+    axis: DistributeAxis,
+) -> Result<(), DeckError> {
+    let frames = element_frames(draft, slide, elements)?;
+    let mut ordered = elements
+        .iter()
+        .cloned()
+        .zip(frames)
+        .enumerate()
+        .map(|(index, (id, transform))| (axis.start(&transform), index, id, transform))
+        .collect::<Vec<_>>();
+    ordered.sort_by_key(|(start, index, _, _)| (*start, *index));
+
+    let start = ordered.first().map_or(0, |(start, _, _, _)| *start);
+    let end = ordered.last().map_or(start, |(_, _, _, transform)| axis.start(transform).saturating_add(axis.size(transform)));
+    let total = ordered.iter().map(|(_, _, _, transform)| axis.size(transform)).sum::<i64>();
+    let gaps = (ordered.len() - 1) as i64;
+    let spacing = end.saturating_sub(start).saturating_sub(total) / gaps;
+
+    let last = ordered.len() - 1;
+    let mut cursor = start;
+    let mut updates = Vec::with_capacity(last.saturating_sub(1));
+    for (position, (_, _, id, transform)) in ordered.iter().enumerate() {
+        if position != 0 && position != last {
+            let mut next = *transform;
+            axis.set_start(&mut next, cursor);
+            updates.push((id.clone(), next));
+        }
+        cursor = cursor.saturating_add(axis.size(transform)).saturating_add(spacing);
+    }
+    for (id, transform) in updates {
+        draft.update_transform(slide, &id, transform)?;
+    }
+    Ok(())
 }
 
 fn transform_value(transform: Transform) -> Value {
@@ -878,11 +1111,8 @@ mod tests {
     fn slide_move_reorders_one_slide_without_touching_the_others() {
         let (mut deck, ids) = titled_deck(&["Intro", "Plan", "Close"]);
         let revision = deck.revision();
-        let report = edit(
-            &mut deck,
-            &json!({ "operations": [{ "op": "slide.move", "slideId": ids[2], "index": 0 }] }),
-        )
-        .expect("slide move commits");
+        let report = edit(&mut deck, &json!({ "operations": [{ "op": "slide.move", "slideId": ids[2], "index": 0 }] }))
+            .expect("slide move commits");
 
         assert_eq!(report["revision"], revision + 1, "one script is one revision bump");
         assert_eq!(slide_titles(&deck), ["Close", "Intro", "Plan"]);
@@ -894,18 +1124,12 @@ mod tests {
         let (mut deck, ids) = titled_deck(&["Intro", "Plan"]);
         let revision = deck.revision();
 
-        let error = edit(
-            &mut deck,
-            &json!({ "operations": [{ "op": "slide.move", "slideId": "slide-missing", "index": 0 }] }),
-        )
-        .expect_err("an unknown slide is refused");
+        let error = edit(&mut deck, &json!({ "operations": [{ "op": "slide.move", "slideId": "slide-missing", "index": 0 }] }))
+            .expect_err("an unknown slide is refused");
         assert_eq!(error.code, "object/not-found");
 
-        let error = edit(
-            &mut deck,
-            &json!({ "operations": [{ "op": "slide.move", "slideId": ids[0], "index": 2 }] }),
-        )
-        .expect_err("an out-of-range index is refused");
+        let error = edit(&mut deck, &json!({ "operations": [{ "op": "slide.move", "slideId": ids[0], "index": 2 }] }))
+            .expect_err("an out-of-range index is refused");
         assert_eq!(error.code, "session/argument-invalid");
 
         assert_eq!(deck.revision(), revision, "failed moves consume no revision");
@@ -926,11 +1150,8 @@ mod tests {
         for name in ["element.bringToFront", "element.bringForward"] {
             let (mut deck, slide, first, second) = two_shapes();
             let revision = deck.revision();
-            let report = edit(
-                &mut deck,
-                &json!({ "operations": [{ "op": name, "slideId": slide, "elementId": first }] }),
-            )
-            .expect("restack commits");
+            let report = edit(&mut deck, &json!({ "operations": [{ "op": name, "slideId": slide, "elementId": first }] }))
+                .expect("restack commits");
 
             assert_eq!(report["revision"], revision + 1, "{name} is one revision bump");
             assert_eq!(element_ids(&deck, &slide), [second.clone(), first.clone()], "{name} raises the first element");
@@ -943,11 +1164,8 @@ mod tests {
 
         for name in ["element.sendToBack", "element.sendBackward"] {
             let (mut deck, slide, first, second) = two_shapes();
-            edit(
-                &mut deck,
-                &json!({ "operations": [{ "op": name, "slideId": slide, "elementId": second }] }),
-            )
-            .expect("restack commits");
+            edit(&mut deck, &json!({ "operations": [{ "op": name, "slideId": slide, "elementId": second }] }))
+                .expect("restack commits");
 
             assert_eq!(element_ids(&deck, &slide), [second.clone(), first.clone()], "{name} lowers the second element");
         }
@@ -1134,5 +1352,383 @@ mod tests {
         )
         .expect("deferred operations commit together");
         assert_eq!(report["revision"], revision + 1, "two deferred operations still bump once");
+    }
+
+    fn shape_deck(boxes: &[(f64, f64, f64, f64)]) -> (Deck, String, Vec<String>) {
+        let mut deck = Deck::create(DeckCreateOptions::default());
+        let mut ids = Vec::new();
+        let slide = deck
+            .transaction(None, |edit| {
+                let slide = edit.add_slide(SlideAddOptions { layout: None, index: None })?;
+                for (x, y, width, height) in boxes {
+                    let id = edit.add_shape(
+                        &slide,
+                        ShapeElementInput {
+                            geometry: "rect".to_string(),
+                            transform: Some(Transform::from_points(*x, *y, *width, *height).unwrap()),
+                            fill: None,
+                            line: None,
+                            alt: None,
+                        },
+                    )?;
+                    ids.push(id.as_str().to_string());
+                }
+                Ok(slide)
+            })
+            .expect("shape deck builds");
+        (deck, slide.as_str().to_string(), ids)
+    }
+
+    fn frame_of(detail: &Value, element: &str) -> (f64, f64, f64, f64) {
+        let entry = detail["elements"]
+            .as_array()
+            .expect("elements")
+            .iter()
+            .find(|candidate| candidate["id"] == element)
+            .unwrap_or_else(|| panic!("element `{element}` is missing"));
+        let transform = &entry["transform"];
+        (
+            transform["xPt"].as_f64().expect("x"),
+            transform["yPt"].as_f64().expect("y"),
+            transform["widthPt"].as_f64().expect("width"),
+            transform["heightPt"].as_f64().expect("height"),
+        )
+    }
+
+    fn assert_frame(detail: &Value, element: &str, expected: (f64, f64, f64, f64)) {
+        let actual = frame_of(detail, element);
+        let label = format!("element `{element}`: {actual:?} != {expected:?}");
+        assert!((actual.0 - expected.0).abs() < 0.01, "{label}");
+        assert!((actual.1 - expected.1).abs() < 0.01, "{label}");
+        assert!((actual.2 - expected.2).abs() < 0.01, "{label}");
+        assert!((actual.3 - expected.3).abs() < 0.01, "{label}");
+    }
+
+    #[test]
+    fn element_align_pins_all_six_edges_to_the_slide() {
+        let cases = [
+            ("left", (0.0, 10.0, 50.0, 50.0), (0.0, 20.0, 50.0, 50.0)),
+            ("center", (455.0, 10.0, 50.0, 50.0), (455.0, 20.0, 50.0, 50.0)),
+            ("right", (910.0, 10.0, 50.0, 50.0), (910.0, 20.0, 50.0, 50.0)),
+            ("top", (10.0, 0.0, 50.0, 50.0), (20.0, 0.0, 50.0, 50.0)),
+            ("middle", (10.0, 245.0, 50.0, 50.0), (20.0, 245.0, 50.0, 50.0)),
+            ("bottom", (10.0, 490.0, 50.0, 50.0), (20.0, 490.0, 50.0, 50.0)),
+        ];
+        for (edge, first_expected, second_expected) in cases {
+            let (mut deck, slide, first, second) = two_shapes();
+            let revision = deck.revision();
+            let report = edit(
+                &mut deck,
+                &json!({
+                    "operations": [{
+                        "op": "element.align",
+                        "slideId": slide,
+                        "elementIds": [first, second],
+                        "edge": edge,
+                    }],
+                }),
+            )
+            .expect("alignment commits");
+
+            assert_eq!(report["revision"], revision + 1, "{edge} is one revision bump");
+            let detail = slide_detail(&deck, &slide).expect("slide exists");
+            assert_frame(&detail, &first, first_expected);
+            assert_frame(&detail, &second, second_expected);
+        }
+    }
+
+    #[test]
+    fn element_align_uses_the_selection_bounds() {
+        let (mut deck, slide, ids) = shape_deck(&[(100.0, 100.0, 50.0, 50.0), (300.0, 120.0, 100.0, 80.0)]);
+        edit(
+            &mut deck,
+            &json!({
+                "operations": [{
+                    "op": "element.align",
+                    "slideId": slide,
+                    "elementIds": ids,
+                    "edge": "right",
+                    "relativeTo": "selection",
+                }],
+            }),
+        )
+        .expect("selection alignment commits");
+        let detail = slide_detail(&deck, &slide).expect("slide exists");
+        assert_frame(&detail, &ids[0], (350.0, 100.0, 50.0, 50.0));
+        assert_frame(&detail, &ids[1], (300.0, 120.0, 100.0, 80.0));
+
+        let (mut deck, slide, ids) = shape_deck(&[(100.0, 100.0, 50.0, 50.0), (300.0, 120.0, 100.0, 80.0)]);
+        edit(
+            &mut deck,
+            &json!({
+                "operations": [{
+                    "op": "element.align",
+                    "slideId": slide,
+                    "elementIds": ids,
+                    "edge": "bottom",
+                    "relativeTo": "selection",
+                }],
+            }),
+        )
+        .expect("selection alignment commits");
+        let detail = slide_detail(&deck, &slide).expect("slide exists");
+        assert_frame(&detail, &ids[0], (100.0, 150.0, 50.0, 50.0));
+        assert_frame(&detail, &ids[1], (300.0, 120.0, 100.0, 80.0));
+    }
+
+    #[test]
+    fn element_align_rejects_bad_arguments_without_committing() {
+        let (mut deck, slide, first, second) = two_shapes();
+        let revision = deck.revision();
+
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [{ "op": "element.align", "slideId": slide, "elementIds": [], "edge": "left" }],
+            }),
+        )
+        .expect_err("an empty list is refused");
+        assert_eq!(error.code, "session/argument-invalid");
+
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [{
+                    "op": "element.align",
+                    "slideId": slide,
+                    "elementIds": [first, first],
+                    "edge": "left",
+                }],
+            }),
+        )
+        .expect_err("a repeated element is refused");
+        assert_eq!(error.code, "session/argument-invalid");
+
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [{
+                    "op": "element.align",
+                    "slideId": slide,
+                    "elementIds": [first, "element-missing"],
+                    "edge": "left",
+                }],
+            }),
+        )
+        .expect_err("an unknown element is refused");
+        assert_eq!(error.code, "session/argument-invalid");
+
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [{
+                    "op": "element.align",
+                    "slideId": slide,
+                    "elementIds": [first, second],
+                    "edge": "sideways",
+                }],
+            }),
+        )
+        .expect_err("an unknown edge is refused");
+        assert_eq!(error.code, "session/argument-invalid");
+
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [{
+                    "op": "element.align",
+                    "slideId": slide,
+                    "elementIds": [first, second],
+                    "edge": "left",
+                    "relativeTo": "page",
+                }],
+            }),
+        )
+        .expect_err("an unknown reference frame is refused");
+        assert_eq!(error.code, "session/argument-invalid");
+
+        assert_eq!(deck.revision(), revision, "failed alignments consume no revision");
+        let detail = slide_detail(&deck, &slide).expect("slide exists");
+        assert_frame(&detail, &first, (10.0, 10.0, 50.0, 50.0));
+        assert_frame(&detail, &second, (20.0, 20.0, 50.0, 50.0));
+    }
+
+    #[test]
+    fn element_distribute_evenly_spaces_both_axes() {
+        let (mut deck, slide, ids) = shape_deck(&[
+            (50.0, 10.0, 40.0, 40.0),
+            (180.0, 10.0, 60.0, 40.0),
+            (300.0, 10.0, 20.0, 40.0),
+            (500.0, 10.0, 40.0, 40.0),
+        ]);
+        edit(
+            &mut deck,
+            &json!({
+                "operations": [{
+                    "op": "element.distribute",
+                    "slideId": slide,
+                    "elementIds": ids,
+                    "axis": "horizontal",
+                }],
+            }),
+        )
+        .expect("horizontal distribution commits");
+        let detail = slide_detail(&deck, &slide).expect("slide exists");
+        assert_frame(&detail, &ids[0], (50.0, 10.0, 40.0, 40.0));
+        assert_frame(&detail, &ids[1], (200.0, 10.0, 60.0, 40.0));
+        assert_frame(&detail, &ids[2], (370.0, 10.0, 20.0, 40.0));
+        assert_frame(&detail, &ids[3], (500.0, 10.0, 40.0, 40.0));
+
+        let (mut deck, slide, ids) = shape_deck(&[
+            (10.0, 40.0, 40.0, 30.0),
+            (10.0, 150.0, 40.0, 50.0),
+            (10.0, 260.0, 40.0, 20.0),
+            (10.0, 410.0, 40.0, 30.0),
+        ]);
+        edit(
+            &mut deck,
+            &json!({
+                "operations": [{
+                    "op": "element.distribute",
+                    "slideId": slide,
+                    "elementIds": ids,
+                    "axis": "vertical",
+                }],
+            }),
+        )
+        .expect("vertical distribution commits");
+        let detail = slide_detail(&deck, &slide).expect("slide exists");
+        assert_frame(&detail, &ids[0], (10.0, 40.0, 40.0, 30.0));
+        assert_frame(&detail, &ids[1], (10.0, 160.0, 40.0, 50.0));
+        assert_frame(&detail, &ids[2], (10.0, 300.0, 40.0, 20.0));
+        assert_frame(&detail, &ids[3], (10.0, 410.0, 40.0, 30.0));
+    }
+
+    #[test]
+    fn element_distribute_rejects_bad_arguments_without_committing() {
+        let (mut deck, slide, ids) =
+            shape_deck(&[(50.0, 10.0, 40.0, 40.0), (180.0, 10.0, 60.0, 40.0), (500.0, 10.0, 40.0, 40.0)]);
+        let revision = deck.revision();
+
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [{
+                    "op": "element.distribute",
+                    "slideId": slide,
+                    "elementIds": [ids[0], ids[1]],
+                    "axis": "horizontal",
+                }],
+            }),
+        )
+        .expect_err("fewer than three elements is refused");
+        assert_eq!(error.code, "session/argument-invalid");
+
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [{
+                    "op": "element.distribute",
+                    "slideId": slide,
+                    "elementIds": [ids[0], ids[1], ids[1]],
+                    "axis": "horizontal",
+                }],
+            }),
+        )
+        .expect_err("a repeated element is refused");
+        assert_eq!(error.code, "session/argument-invalid");
+
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [{
+                    "op": "element.distribute",
+                    "slideId": slide,
+                    "elementIds": [ids[0], ids[1], "element-missing"],
+                    "axis": "horizontal",
+                }],
+            }),
+        )
+        .expect_err("an unknown element is refused");
+        assert_eq!(error.code, "session/argument-invalid");
+
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [{
+                    "op": "element.distribute",
+                    "slideId": slide,
+                    "elementIds": ids,
+                    "axis": "diagonal",
+                }],
+            }),
+        )
+        .expect_err("an unknown axis is refused");
+        assert_eq!(error.code, "session/argument-invalid");
+
+        assert_eq!(deck.revision(), revision, "failed distributions consume no revision");
+        let detail = slide_detail(&deck, &slide).expect("slide exists");
+        assert_frame(&detail, &ids[0], (50.0, 10.0, 40.0, 40.0));
+        assert_frame(&detail, &ids[1], (180.0, 10.0, 60.0, 40.0));
+        assert_frame(&detail, &ids[2], (500.0, 10.0, 40.0, 40.0));
+    }
+
+    #[test]
+    fn alignment_batches_commit_once_and_undo_as_a_whole() {
+        let (mut deck, slide, first, second) = two_shapes();
+        let revision = deck.revision();
+        let report = edit(
+            &mut deck,
+            &json!({
+                "operations": [
+                    { "op": "element.align", "slideId": slide, "elementIds": [first, second], "edge": "left" },
+                    { "op": "element.align", "slideId": slide, "elementIds": [first, second], "edge": "top" },
+                ],
+            }),
+        )
+        .expect("both alignments commit together");
+        assert_eq!(report["revision"], revision + 1, "one script is one revision bump");
+
+        let detail = slide_detail(&deck, &slide).expect("slide exists");
+        assert_frame(&detail, &first, (0.0, 0.0, 50.0, 50.0));
+        assert_frame(&detail, &second, (0.0, 0.0, 50.0, 50.0));
+
+        assert!(deck.undo(), "undo restores the previous document");
+        let detail = slide_detail(&deck, &slide).expect("slide exists");
+        assert_frame(&detail, &first, (10.0, 10.0, 50.0, 50.0));
+        assert_frame(&detail, &second, (20.0, 20.0, 50.0, 50.0));
+        assert_eq!(deck.revision(), revision + 2, "undo is itself a commit");
+
+        assert!(deck.redo(), "redo reapplies the aligned document");
+        let detail = slide_detail(&deck, &slide).expect("slide exists");
+        assert_frame(&detail, &first, (0.0, 0.0, 50.0, 50.0));
+        assert_frame(&detail, &second, (0.0, 0.0, 50.0, 50.0));
+    }
+
+    #[test]
+    fn a_failing_operation_rolls_back_the_whole_alignment_batch() {
+        let (mut deck, slide, first, second) = two_shapes();
+        let revision = deck.revision();
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [
+                    { "op": "element.align", "slideId": slide, "elementIds": [first, second], "edge": "left" },
+                    {
+                        "op": "element.distribute",
+                        "slideId": slide,
+                        "elementIds": [first, second, "element-missing"],
+                        "axis": "horizontal",
+                    },
+                ],
+            }),
+        )
+        .expect_err("the second operation fails");
+        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(deck.revision(), revision, "no revision is consumed");
+
+        let detail = slide_detail(&deck, &slide).expect("slide exists");
+        assert_frame(&detail, &first, (10.0, 10.0, 50.0, 50.0));
+        assert_frame(&detail, &second, (20.0, 20.0, 50.0, 50.0));
     }
 }
