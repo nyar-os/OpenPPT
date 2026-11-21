@@ -2,15 +2,18 @@
 //!
 //! The deck model, transactions, project container, static playback and rule
 //! checks live in the shared upstream tree. This crate only maps arguments,
-//! files, PresentationML export and JSON reports so the CLI and the Node-API
-//! surface share one path instead of growing a second deck model.
+//! files, PresentationML import and export, and JSON reports so the CLI and the
+//! Node-API surface share one path instead of growing a second deck model.
 
 #![deny(missing_docs)]
 
 pub mod edit;
 pub mod export;
+pub mod import;
 pub mod pptx;
 pub mod render;
+
+pub use import::{ImportOutcome, import_pptx};
 
 use std::{
     fmt, fs, io,
@@ -70,18 +73,19 @@ impl From<io::Error> for ServiceError {
 ///
 /// The matrix only claims what is wired: the native project container, editing,
 /// saving, static playback, the implemented rule checks, PresentationML
-/// playback and export, and per-page SVG rendering. PPTX import is `partial`
-/// because charts, SmartArt, OLE objects, media and groups are refused with
-/// stable codes instead of being faked; PPTX export is `partial` because charts,
-/// formulas, media and groups are skipped and reported. PNG/PDF rendering,
-/// timed builds, transitions and media playback stay `unsupported`.
+/// playback, editable PresentationML import, PresentationML export and per-page
+/// SVG rendering. PPTX import, edit and export stay `partial` because charts,
+/// SmartArt, OLE objects, media and groups are refused or dropped with stable
+/// codes instead of being faked, and a slide background has no editable slot.
+/// PNG/PDF rendering, timed builds, transitions and media playback stay
+/// `unsupported`.
 pub fn capabilities() -> Value {
     let mut formats = Map::new();
     for format in PRESENTATION_FORMATS {
         let entry = if pptx::EXTENSIONS.contains(format) {
             json!({
                 "import": "partial",
-                "edit": "unsupported",
+                "edit": "partial",
                 "export": if matches!(*format, "pptx" | "ppsx" | "potx") { "partial" } else { "unsupported" },
                 "playback": "partial",
                 "lossCodes": pptx::LOSS_CODES,

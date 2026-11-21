@@ -22,7 +22,19 @@ use crate::ServiceError;
 pub const EXTENSIONS: &[&str] = &["pptx", "pptm", "ppsx", "ppsm", "potx", "potm"];
 
 /// Refusal codes reported when a construct is only partially carried.
-pub const LOSS_CODES: &[&str] = &[codes::CHART, codes::SMART_ART, codes::OLE_OBJECT, codes::MEDIA, codes::GROUP];
+///
+/// The reader owns the `import.pptx.*` codes; `table-empty` and
+/// `fill-approximated` are reported by the editable importer for constructs the
+/// authored model cannot represent.
+pub const LOSS_CODES: &[&str] = &[
+    codes::CHART,
+    codes::SMART_ART,
+    codes::OLE_OBJECT,
+    codes::MEDIA,
+    codes::GROUP,
+    codes::FILL_APPROXIMATED,
+    crate::import::LOSS_TABLE_EMPTY,
+];
 
 /// One imported presentation at its rendered state.
 ///
@@ -104,7 +116,7 @@ fn issue_value(issue: &PptxIssue) -> Value {
     })
 }
 
-fn format_error(error: FormatError) -> ServiceError {
+pub(crate) fn format_error(error: FormatError) -> ServiceError {
     let code = match &error {
         FormatError::NotImplemented { .. } => "capability/not-implemented",
         FormatError::InvalidInput { .. } | FormatError::Parse { .. } => "format/invalid-package",
