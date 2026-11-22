@@ -11,9 +11,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { isOpenPPTError } from './errors.js';
-import { nativeBinding } from './native.js';
-import { OpenPPT } from './open-ppt.js';
+import { isOpenPPTError } from '../src/errors.js';
+import { nativeBinding } from '../src/native.js';
+import { OpenPPT } from '../src/open-ppt.js';
 
 const installed = (() => {
     try {

@@ -1,49 +1,36 @@
 # @wae/open-ppt
 
-TypeScript authoring surface for OpenPPT: one editable deck model behind
-playback, visual editing and agent authoring. The session entry point is
-`new OpenPPT(options?)`.
+The SDK and CLI behind OpenPPT decks: one session type, revisioned edit transactions, and format reports returned as plain values instead of thrown surprises.
 
-## Status
+## API surface
 
-The session entry point is `new OpenPPT(options?)`. This build wires one
-editable deck model to the following operations:
+- `new OpenPPT(options?)` creates a session. The constructor opens no window, file or socket.
+- `ppt.capabilities()` reports what the installed engine can import, edit, export and play.
+- `ppt.create(options)`, `ppt.open(input)` and `ppt.importPptx(path)` return an editable `Deck`.
+- `ppt.readPptx(path)` plays a `.pptx`-family package without building an authoring project.
+- `ppt.inspect(input, options)` runs checks; `ppt.dispose()` releases every handle.
+- `Deck` exposes `save`, `edit`, `transaction`, `undo`, `redo`, `search`, `outline`, `slide`, `play`, `inspect`, `render`, `contactSheet` and `export`.
+- `deck.slides` adds, moves, duplicates, reorders and removes slides; `deck.assets` lists and embeds assets; `slide.elements` adds and updates text, images, shapes, tables, charts, formulas and media.
+- Every failure is an `OpenPPTError` with a stable `code` such as `object/not-found`, `session/argument-invalid` or `object/unsupported`.
 
-- `create`, `open` and `importPptx` return editable decks with `save`, `edit`,
-  `undo`/`redo` and static playback.
-- `render({ format: 'svg' })` returns one standalone SVG page per slide.
-- `export({ format: 'pptx' | 'ppsx' | 'potx' })` writes an editable
-  PresentationML package, including tables, picture assets, slide backgrounds
-  and speaker notes.
-- `export({ format: 'pdf' })` writes a static PDF 1.7 projection with
-  backgrounds, shapes, text, tables and JPEG pictures.
-- `importPptx(path)` carries text, placeholders, pictures, preset shapes,
-  tables, slide backgrounds and speaker notes. Refused constructs are listed on
-  `deck.importLosses` with stable `import.pptx.*` codes instead of being faked.
-- `capabilities()` reports the real matrix. Anything not wired is
-  `unsupported`, or `partial` with its loss codes.
-- `await deck.search('revenue')` finds visible text across every slide (case
-  insensitive by default, `limit` 100) and `deck.outline()` lists slide titles,
-  notes and element counts without rendering.
+## Example
 
-PPTX import and export remain `partial`: charts, SmartArt, OLE objects, media
-and groups are skipped and reported, and non-solid backgrounds are flattened to
-an explicit no-fill with a loss code. PDF export is `partial`: only JPEG
-pictures are embedded, characters outside Latin-1 become `?`, and charts,
-formulas, media and groups are reported instead of painted. PNG/PDF rendering,
-timed builds, transitions and media playback are not implemented.
+```ts
+import { OpenPPT } from '@wae/open-ppt';
 
-## Boundaries
-
-- PPTX parsing, layout math, text shaping and playback stay in the shared
-  engine. This package only binds values and assembles the CLI.
-- No second deck model: playback and editing consume the same project revision.
-- Native access goes through the Node-API binding in `projects/crates/napi`.
-
-## Scripts
-
-```bash
-pnpm --filter @wae/open-ppt run typecheck
-pnpm --filter @wae/open-ppt run build
-pnpm --filter @wae/open-ppt run test
+const ppt = new OpenPPT();
+const deck = await ppt.create({ title: 'Quarterly review', size: '16:9', slides: ['Summary'] });
+const [first] = await deck.slides.list();
+const slide = await deck.slides.get(first.id);
+await slide.elements.addText({ text: 'Revenue is up 18% year over year', transform: { xPt: 72, yPt: 120, widthPt: 480, heightPt: 80 } });
+const { losses } = await deck.export({ format: 'pptx', target: 'review.pptx' });
+console.log(losses);
+await ppt.dispose();
 ```
+
+`losses` lists every construct the export could not keep. Pass `lossPolicy: 'error'` to refuse writing instead.
+
+## Related packages
+
+- [OpenPPT project README](../../../readme.md)
+- [@wae/open-ppt-skills](../open-ppt-skills/README.md)

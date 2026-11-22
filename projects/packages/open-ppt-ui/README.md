@@ -1,17 +1,11 @@
-# open-ppt-ui
+# @wae/open-ppt-ui
 
-VMZ static UI for the OpenPPT desktop window. `vmz build . --profile static`
-emits `dist/static`, which the repository staging step copies to
-`projects/packages/open-ppt/dist/gui` for the native WebView host.
+Desktop shell for OpenPPT Studio. This private package contains the VMZ static UI that is staged into the `@wae/open-ppt` GUI asset; it is not published on its own.
+
+## Usage
 
 ```bash
-pnpm --filter @wae/open-ppt-ui run check   # vmz check
-pnpm --filter @wae/open-ppt-ui run build   # vmz build --profile static
-pnpm --filter @wae/open-ppt-ui run serve   # local preview
+open-ppt gui
 ```
 
-The page talks to the host over `chrome.webview.postMessage` JSON-RPC
-(`ready`, `deck.create`, `deck.open`, `deck.slide`, `deck.asset`, `deck.edit`,
-`deck.undo`, `deck.redo`, `deck.save`, `deck.close`, `close`). Without a
-WebView host it falls back to a built-in preview slide so the layout can be
-inspected in a plain browser.
+The window talks to the native host over `chrome.webview.postMessage` JSON-RPC (`ready`, `capabilities`, `deck.create`, `deck.open`, `deck.save`, `deck.inspect`, `deck.export`, `deck.close`, `close`). Without a WebView host it shows an empty state and a preview notice; it never fabricates a deck.

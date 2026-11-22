@@ -1,25 +1,20 @@
 # @wae/open-ppt-skills
 
-Agent skills for OpenPPT. The package ships skill documents only; it is not a
-runtime library and contains no XML, ZIP, typesetting or drawing algorithms.
+Agent skill documents for OpenPPT. The package ships Markdown only: no runtime library, XML/ZIP code, typesetting or drawing algorithms.
 
-## Status
+## Usage
 
-Scaffold only. `skills/open-ppt/SKILL.md` records the routing and evidence rules
-for create, edit, template fill, review and delivery, but no SDK or CLI
-capability exists yet, so none of those routes is executable.
-
-## Layout
+Install it next to `@wae/open-ppt`, then ask your agent to use the `open-ppt` skill:
 
 ```text
-packages/open-ppt-skills/
-├── package.json
-├── README.md
-└── skills/
-    └── open-ppt/
-        └── SKILL.md
+Use the open-ppt skill to import review.pptx, mark every slide title in the
+speaker notes, and export a PDF for review.
 ```
 
-Design rules, the format/support matrix and executable examples are added with
-the first implemented release. The skill must never be shipped claiming methods,
-commands or flags that the installed SDK/CLI does not expose.
+The skill drives the `open-ppt` CLI and starts with `open-ppt capabilities --json`.
+
+## Related
+
+- [Product overview](../../../readme.md)
+- [`@wae/open-ppt`](../open-ppt/README.md)
+- [Agent guide](../../../documentation/agents.md)

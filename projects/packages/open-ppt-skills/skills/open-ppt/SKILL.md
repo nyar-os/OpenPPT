@@ -1,24 +1,23 @@
 ---
 name: open-ppt
-description: Create, revise, review and deliver editable presentation decks with OpenPPT. Use when a task involves slide decks, PPTX exchange, template fill or deck review.
+description: Create, revise, review and deliver editable presentation decks with OpenPPT. Use when a task involves slide decks, PPTX import/export or deck review.
 ---
 
 # open-ppt
 
 ## Status
 
-Scaffold. `@wae/open-ppt` can create, open, inspect, play and save the native
-editable deck. The `play` command also plays a PresentationML package and can
-write one SVG frame per slide into a directory; `open-ppt gui` opens the VMZ
-editor window, which switches to a player when a `.pptx` is opened. PPTX write,
-editing imported PPTX, timed builds and transitions, the Display renderer and
-template fill are still unimplemented; do not present those routes as
-executable, and do not fill the gap with local XML, ZIP, typesetting or drawing
-code.
+`@wae/open-ppt` can create, open, inspect, play, edit, render, search and export
+the native editable deck. `import` turns a PresentationML package into an
+editable project, and `export` writes PPTX, PPSX, POTX or PDF with a loss
+report. `open-ppt gui` opens the VMZ editor window, which switches to a player
+when a `.pptx` is opened. Template fill, timed builds and transitions are not
+implemented; do not present those routes as executable, and do not fill the gap
+with local XML, ZIP, typesetting or drawing code.
 
 ## Preflight
 
-Once the SDK/CLI ships, every task starts here:
+Every task starts here:
 
 1. Query the capabilities the installed SDK/CLI reports and confirm the format,
    object, playback and backend entries the task needs. A method name alone is

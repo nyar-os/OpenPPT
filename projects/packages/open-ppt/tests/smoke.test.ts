@@ -10,11 +10,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { formatFromPath, formatInfo, OpenPPT, OpenPPTError, presentationFormats } from './index.js';
-import { buildOutline, collectTextSegments, findTextMatches, searchSlides } from './index.js';
-import type { DeckInput } from './index.js';
-import { buildContactSheetSvg } from './contact-sheet.js';
-import { nativeBinding } from './native.js';
+import { formatFromPath, formatInfo, OpenPPT, OpenPPTError, presentationFormats } from '../src/index.js';
+import { buildOutline, collectTextSegments, findTextMatches, searchSlides } from '../src/index.js';
+import type { DeckInput } from '../src/index.js';
+import { buildContactSheetSvg } from '../src/contact-sheet.js';
+import { nativeBinding } from '../src/native.js';
 
 const installed = (() => {
     try {
