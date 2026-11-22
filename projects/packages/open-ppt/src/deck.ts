@@ -1041,6 +1041,9 @@ function patchOperations(slideId: SlideId, elementId: ElementId, patch: ElementP
     if (patch.text !== undefined) {
         operations.push({ op: 'element.setText', slideId, elementId, text: textJson(patch.text) });
     }
+    if (patch.style !== undefined) {
+        operations.push({ op: 'element.setTextStyle', slideId, elementId, ...patch.style });
+    }
     if (patch.data !== undefined) {
         operations.push({ op: 'element.setChartData', slideId, elementId, data: patch.data });
     }

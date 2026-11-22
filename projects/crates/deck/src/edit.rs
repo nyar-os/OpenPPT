@@ -210,7 +210,7 @@ fn element_style(element: &Element) -> Value {
     json!({
         "fill": element.style.fill.as_ref().map(fill_value),
         "line": element.style.line.as_ref().map(line_value),
-        "fontFamily": element.style.font_family.clone(),
+        "fontFamily": runs.and_then(|run| run.font_family.clone()).or_else(|| element.style.font_family.clone()),
         "sizePt": runs.and_then(|run| run.size_pt),
         "bold": runs.and_then(|run| run.bold).unwrap_or(false),
         "italic": runs.and_then(|run| run.italic).unwrap_or(false),
@@ -444,6 +444,14 @@ impl EditState {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
                 draft.set_element_text(&slide, &element, text_content(operation.get("text"))?)?;
+                None
+            }
+            "element.setTextStyle" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let style = TextStyle::parse(operation)?;
+                let content = styled_content(draft, &slide, &element, &style)?;
+                draft.set_element_text(&slide, &element, content)?;
                 None
             }
             "element.setChartData" => {
@@ -778,6 +786,128 @@ fn text_content(value: Option<&Value>) -> Result<TextContent, DeckError> {
         Some(value) => serde_json::from_value(value.clone()).map_err(|error| invalid(format!("unusable rich text: {error}"))),
         None => Err(invalid("text input is missing")),
     }
+}
+
+/// Run-level styling applied by `element.setTextStyle`.
+///
+/// Every set field is written onto every run of the element; omitted or `null`
+/// fields keep the run's current value.
+struct TextStyle {
+    bold: Option<bool>,
+    italic: Option<bool>,
+    underline: Option<bool>,
+    strike: Option<bool>,
+    size_pt: Option<f64>,
+    color: Option<String>,
+    font_family: Option<String>,
+}
+
+impl TextStyle {
+    fn parse(operation: &Value) -> Result<Self, DeckError> {
+        let style = Self {
+            bold: optional_bool(operation, "bold")?,
+            italic: optional_bool(operation, "italic")?,
+            underline: optional_bool(operation, "underline")?,
+            strike: optional_bool(operation, "strike")?,
+            size_pt: optional_font_size(operation)?,
+            color: optional_hex_color(operation)?,
+            font_family: optional_string(operation, "fontFamily")?.filter(|family| !family.trim().is_empty()),
+        };
+        if style.bold.is_none()
+            && style.italic.is_none()
+            && style.underline.is_none()
+            && style.strike.is_none()
+            && style.size_pt.is_none()
+            && style.color.is_none()
+            && style.font_family.is_none()
+        {
+            return Err(invalid("`element.setTextStyle` needs at least one style property"));
+        }
+        Ok(style)
+    }
+}
+
+/// Clones the element's rich text and stamps the requested style onto every run.
+fn styled_content(
+    draft: &DeckEdit,
+    slide: &SlideId,
+    element: &ElementId,
+    style: &TextStyle,
+) -> Result<TextContent, DeckError> {
+    let model = draft.document().slide(slide).ok_or_else(|| missing_slide(slide))?;
+    let target = model.element(element).ok_or_else(|| {
+        DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{}` does not exist on this slide", element.as_str()))
+            .with_slide(slide.clone())
+            .with_element(element.clone())
+    })?;
+    let ElementContent::Text(text) = &target.content
+    else {
+        return Err(invalid("`element.setTextStyle` needs a text element"));
+    };
+    let mut text = text.clone();
+    for paragraph in &mut text.paragraphs {
+        for run in &mut paragraph.runs {
+            if let Some(value) = style.bold {
+                run.bold = Some(value);
+            }
+            if let Some(value) = style.italic {
+                run.italic = Some(value);
+            }
+            if let Some(value) = style.underline {
+                run.underline = Some(value);
+            }
+            if let Some(value) = style.strike {
+                run.strike = Some(value);
+            }
+            if let Some(value) = style.size_pt {
+                run.size_pt = Some(value);
+            }
+            if let Some(value) = &style.color {
+                run.color = Some(value.clone());
+            }
+            if let Some(value) = &style.font_family {
+                run.font_family = Some(value.clone());
+            }
+        }
+    }
+    Ok(text)
+}
+
+fn optional_bool(operation: &Value, key: &str) -> Result<Option<bool>, DeckError> {
+    match operation.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(invalid(format!("`{key}` must be a boolean or null"))),
+    }
+}
+
+/// Reads `sizePt` as a point size the format can store.
+fn optional_font_size(operation: &Value) -> Result<Option<f64>, DeckError> {
+    match operation.get("sizePt") {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_f64()
+            .filter(|size| size.is_finite() && (1.0..=4000.0).contains(size))
+            .map(Some)
+            .ok_or_else(|| invalid("`sizePt` must be between 1 and 4000 points")),
+    }
+}
+
+/// Reads `color` as `#RGB` or `#RRGGBB` and normalizes it to `#RRGGBB`.
+fn optional_hex_color(operation: &Value) -> Result<Option<String>, DeckError> {
+    let Some(raw) = optional_string(operation, "color")?
+    else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim().trim_start_matches('#');
+    let expanded = match trimmed.len() {
+        3 if trimmed.chars().all(|character| character.is_ascii_hexdigit()) => {
+            trimmed.chars().flat_map(|character| [character, character]).collect::<String>()
+        }
+        6 if trimmed.chars().all(|character| character.is_ascii_hexdigit()) => trimmed.to_string(),
+        _ => return Err(invalid("`color` must be a 3- or 6-digit hex colour")),
+    };
+    Ok(Some(format!("#{}", expanded.to_ascii_uppercase())))
 }
 
 fn optional_transform(operation: &Value) -> Result<Option<Transform>, DeckError> {

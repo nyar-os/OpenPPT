@@ -308,11 +308,25 @@ export interface MediaElementInput {
     readonly transform?: Transform;
 }
 
+/** Run-level text style applied to every run of one text element. */
+export interface TextStyle {
+    readonly bold?: boolean;
+    readonly italic?: boolean;
+    readonly underline?: boolean;
+    readonly strike?: boolean;
+    /** Point size, 1–4000. */
+    readonly sizePt?: number;
+    /** Text colour as `#RGB` or `#RRGGBB`. */
+    readonly color?: string;
+    readonly fontFamily?: string;
+}
+
 /** Partial element update addressed by ID. */
 export interface ElementPatch {
     readonly transform?: Transform;
     readonly alt?: string;
     readonly text?: TextInput;
+    readonly style?: TextStyle;
     readonly fill?: string;
     readonly data?: ChartData;
     readonly expectedRevision?: number;

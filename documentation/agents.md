@@ -113,7 +113,7 @@ Common operations:
 | Family | Operations |
 |---|---|
 | Slides | `slide.add`, `slide.duplicate`, `slide.remove`, `slide.move`, `slide.reorder`, `slide.setTitle`, `slide.setNotes`, `slide.setHidden`, `slide.setBackground` |
-| Elements | `text.add`, `image.add`, `shape.add`, `table.add`, `chart.add`, `formula.add`, `media.add`, `element.remove`, `element.setText`, `element.updateTransform`, `element.updateAlt`, `element.setChartData` |
+| Elements | `text.add`, `image.add`, `shape.add`, `table.add`, `chart.add`, `formula.add`, `media.add`, `element.remove`, `element.setText`, `element.setTextStyle`, `element.updateTransform`, `element.updateAlt`, `element.setChartData` |
 | Arrange | `element.align`, `element.distribute`, `element.duplicate`, `element.reorder`, `element.bringToFront`, `element.sendToBack`, `element.bringForward`, `element.sendBackward`, `element.lock` |
 
 A batch is atomic: it either advances the deck revision once or leaves the previous revision untouched. Pass `--expected-revision` to reject a stale writer with `deck/revision-conflict`.

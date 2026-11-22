@@ -1006,6 +1006,67 @@ fn chart_deck() -> (Deck, String, String) {
 }
 
 #[test]
+fn element_text_style_reaches_every_run() {
+    let (mut deck, slide) = background_deck();
+    let element = element_ids(&deck, &slide)[0].clone();
+    let revision = deck.revision();
+
+    let report = edit(
+        &mut deck,
+        &json!({
+            "operations": [{
+                "op": "element.setTextStyle",
+                "slideId": slide,
+                "elementId": element,
+                "bold": true,
+                "sizePt": 28,
+                "color": "#0a0",
+                "fontFamily": "Inter",
+            }],
+        }),
+    )
+    .expect("text style commits");
+    assert_eq!(report["revision"], revision + 1, "one script is one revision bump");
+
+    let detail = slide_detail(&deck, &slide).expect("slide detail");
+    let style = element_entry(&detail, &element)["style"].clone();
+    assert_eq!(style["bold"], json!(true));
+    assert_eq!(style["sizePt"], json!(28.0));
+    assert_eq!(style["color"], json!("#00AA00"));
+    assert_eq!(style["fontFamily"], json!("Inter"));
+
+    let error = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "element.setTextStyle", "slideId": slide, "elementId": element }] }),
+    )
+    .expect_err("an empty style is refused");
+    assert_eq!(error.code, "session/argument-invalid");
+
+    for operation in [
+        json!({ "op": "element.setTextStyle", "slideId": slide, "elementId": element, "sizePt": 0 }),
+        json!({ "op": "element.setTextStyle", "slideId": slide, "elementId": element, "color": "red" }),
+        json!({ "op": "element.setTextStyle", "slideId": slide, "elementId": "element-missing", "bold": true }),
+    ] {
+        let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("invalid text style");
+        assert!(error.code == "session/argument-invalid" || error.code == "object/not-found");
+    }
+    assert_eq!(deck.revision(), revision + 1, "failed styles consume no revision");
+
+    let (mut shapes, shape_slide, shape, _) = two_shapes();
+    let error = edit(
+        &mut shapes,
+        &json!({ "operations": [{
+            "op": "element.setTextStyle",
+            "slideId": shape_slide,
+            "elementId": shape,
+            "bold": true,
+        }] }),
+    )
+    .expect_err("a shape has no text runs");
+    assert_eq!(error.code, "session/argument-invalid");
+}
+
+#[test]
 fn a_failing_duplicate_rolls_back_the_whole_batch() {
     let (mut deck, slide, sources) = duplicate_deck();
     let revision = deck.revision();
