@@ -694,6 +694,19 @@ class ElementsView {
         this.deck.apply([{ op: 'element.distribute', slideId: this.slideId, elementIds, axis }]);
     }
 
+    async duplicate(
+        elementId: ElementId,
+        options?: { readonly offsetX?: number; readonly offsetY?: number },
+    ): Promise<Element> {
+        return this.commit({
+            op: 'element.duplicate',
+            slideId: this.slideId,
+            elementId,
+            offsetXPt: options?.offsetX,
+            offsetYPt: options?.offsetY,
+        });
+    }
+
     async zOrder(elementId: ElementId, order: ZOrder): Promise<void> {
         const operations: Record<ZOrder, string> = {
             front: 'element.bringToFront',

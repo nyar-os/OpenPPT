@@ -10,7 +10,7 @@ use data_encoding::representation::Base64;
 
 use crate::base64_text;
 use document_presentation::authored::{
-    AssetId, ChartData, ChartElementInput, Deck, DeckEdit, DeckError, Element, ElementContent, ElementId, Fill,
+    AssetId, ChartData, ChartElementInput, Deck, DeckEdit, DeckError, EMU_PER_POINT, Element, ElementContent, ElementId, Fill,
     FormulaElementInput, ImageElementInput, LayoutId, Line, LockFlags, MediaKind, ShapeElementInput, SlideAddOptions, SlideId,
     TableCell, TableElementInput, TableRow, TextContent, TextElementInput, Transform, codes,
 };
@@ -418,6 +418,7 @@ impl EditState {
                 draft.update_transform(&slide, &element, required_transform(operation)?)?;
                 None
             }
+            "element.duplicate" => Some(self.duplicate_element(draft, operation)?),
             "element.align" => {
                 let slide = self.slide(operation)?;
                 let elements = self.element_list(operation, "elementIds", 1)?;
@@ -534,6 +535,82 @@ impl EditState {
         Ok(asset.as_str().to_string())
     }
 
+    /// Rebuilds the source content as a new element at the end of the slide.
+    ///
+    /// Only content the public `add_*` inputs can express is duplicated, so an
+    /// element that would lose crop, placeholder or alt data is refused instead
+    /// of being copied partially.
+    fn duplicate_element(&mut self, draft: &mut DeckEdit, operation: &Value) -> Result<String, DeckError> {
+        let slide = self.slide(operation)?;
+        let element = self.element(operation)?;
+        let source = {
+            let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
+            model.element(&element).cloned().ok_or_else(|| {
+                DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
+                    .with_slide(slide.clone())
+                    .with_element(element.clone())
+            })?
+        };
+        let mut transform = source.transform;
+        transform.x_emu = transform.x_emu.saturating_add(offset_emu(operation, "offsetXPt")?);
+        transform.y_emu = transform.y_emu.saturating_add(offset_emu(operation, "offsetYPt")?);
+        let created = match &source.content {
+            ElementContent::Text(text) => {
+                if source.placeholder.is_some() {
+                    return Err(unsupported_element(
+                        &slide,
+                        &element,
+                        "placeholder-bound text cannot be duplicated without sharing one layout placeholder",
+                    ));
+                }
+                draft.add_text(
+                    &slide,
+                    TextElementInput { text: text.clone(), transform: Some(transform), alt: source.alt.clone(), placeholder: None },
+                )?
+            }
+            ElementContent::Image(image) => {
+                if image.crop.is_some() {
+                    return Err(unsupported_element(&slide, &element, "cropped images cannot be rebuilt through `image.add`"));
+                }
+                let alt = source
+                    .alt
+                    .clone()
+                    .filter(|alt| !alt.trim().is_empty())
+                    .ok_or_else(|| unsupported_element(&slide, &element, "images without alternative text cannot be rebuilt through `image.add`"))?;
+                draft.add_image(&slide, ImageElementInput { asset: image.asset.clone(), transform: Some(transform), alt })?
+            }
+            ElementContent::Shape(shape) => draft.add_shape(
+                &slide,
+                ShapeElementInput {
+                    geometry: shape.geometry.clone(),
+                    transform: Some(transform),
+                    fill: shape.fill.clone(),
+                    line: shape.line.clone(),
+                    alt: source.alt.clone(),
+                },
+            )?,
+            ElementContent::Table(table) => draft.add_table(
+                &slide,
+                TableElementInput {
+                    column_widths_emu: table.column_widths_emu.clone(),
+                    rows: table.rows.clone(),
+                    transform: Some(transform),
+                    alt: source.alt.clone(),
+                },
+            )?,
+            ElementContent::Chart(_) => {
+                return Err(unsupported_element(&slide, &element, "charts cannot be rebuilt through the public authoring inputs"))
+            }
+            ElementContent::Formula(_) => {
+                return Err(unsupported_element(&slide, &element, "formulas cannot be rebuilt through the public authoring inputs"))
+            }
+            ElementContent::Media(_) => {
+                return Err(unsupported_element(&slide, &element, "media cannot be rebuilt through the public authoring inputs"))
+            }
+        };
+        Ok(created.as_str().to_string())
+    }
+
     fn asset(&mut self, draft: &mut DeckEdit, operation: &Value) -> Result<AssetId, DeckError> {
         if let Some(inline) = operation.get("asset") {
             let name = required_str(inline, "name")?.to_string();
@@ -632,6 +709,26 @@ fn required_usize(operation: &Value, key: &str) -> Result<usize, DeckError> {
         .as_u64()
         .and_then(|number| usize::try_from(number).ok())
         .ok_or_else(|| invalid(format!("`{key}` must be a non-negative integer")))
+}
+
+/// Reads an optional point offset, keeping its sign and accepting zero.
+fn offset_emu(operation: &Value, key: &str) -> Result<i64, DeckError> {
+    let Some(value) = operation.get(key) else {
+        return Ok(0);
+    };
+    if value.is_null() {
+        return Ok(0);
+    }
+    let points = value
+        .as_f64()
+        .filter(|points| points.is_finite())
+        .ok_or_else(|| invalid(format!("`{key}` must be a finite number in points")))?;
+    let magnitude = (points.abs() * EMU_PER_POINT as f64).round();
+    if magnitude > i64::MAX as f64 {
+        return Err(invalid(format!("`{key}` is outside the supported range")));
+    }
+    let emu = magnitude as i64;
+    Ok(if points < 0.0 { -emu } else { emu })
 }
 
 /// Parses `null` or `{ "kind": "solid", "color": "#RRGGBB" }`.
@@ -789,6 +886,12 @@ fn missing_slide(slide: &SlideId) -> DeckError {
 
 fn unknown_element(slide: &SlideId, element: &ElementId) -> DeckError {
     invalid(format!("element `{element}` does not exist on this slide")).with_slide(slide.clone()).with_element(element.clone())
+}
+
+fn unsupported_element(slide: &SlideId, element: &ElementId, reason: &str) -> DeckError {
+    DeckError::new(codes::OBJECT_UNSUPPORTED, format!("element `{element}` cannot be duplicated: {reason}"))
+        .with_slide(slide.clone())
+        .with_element(element.clone())
 }
 
 fn element_frames(draft: &DeckEdit, slide: &SlideId, elements: &[ElementId]) -> Result<Vec<Transform>, DeckError> {
@@ -1025,7 +1128,8 @@ fn element_text(element: &document_presentation::authored::Element) -> Option<St
 #[cfg(test)]
 mod tests {
     use document_presentation::authored::{
-        DeckCreateOptions, ShapeElementInput, SlideAddOptions, TextContent, TextElementInput, Transform,
+        ChartData, ChartSeries, ChartType, DeckCreateOptions, ShapeElementInput, SlideAddOptions, TextContent,
+        TextElementInput, Transform,
     };
 
     use super::*;
@@ -1730,5 +1834,267 @@ mod tests {
         let detail = slide_detail(&deck, &slide).expect("slide exists");
         assert_frame(&detail, &first, (10.0, 10.0, 50.0, 50.0));
         assert_frame(&detail, &second, (20.0, 20.0, 50.0, 50.0));
+    }
+
+    fn element_entry<'a>(detail: &'a Value, element: &str) -> &'a Value {
+        detail["elements"]
+            .as_array()
+            .expect("elements")
+            .iter()
+            .find(|candidate| candidate["id"] == element)
+            .unwrap_or_else(|| panic!("element `{element}` is missing"))
+    }
+
+    /// One text, shape, table and image element, in paint order.
+    fn duplicate_deck() -> (Deck, String, Vec<String>) {
+        let mut deck = Deck::create(DeckCreateOptions::default());
+        let mut ids = Vec::new();
+        let slide = deck
+            .transaction(None, |edit| {
+                let slide = edit.add_slide(SlideAddOptions { layout: None, index: None })?;
+                let text = edit.add_text(
+                    &slide,
+                    TextElementInput {
+                        text: TextContent::plain("Hello"),
+                        transform: Some(Transform::from_points(10.0, 10.0, 120.0, 40.0).unwrap()),
+                        alt: Some("greeting".to_string()),
+                        placeholder: None,
+                    },
+                )?;
+                let shape = edit.add_shape(
+                    &slide,
+                    ShapeElementInput {
+                        geometry: "roundRect".to_string(),
+                        transform: Some(Transform::from_points(20.0, 90.0, 80.0, 40.0).unwrap()),
+                        fill: Some(Fill::Solid { color: "#123456".to_string() }),
+                        line: Some(Line { color: Some("#000000".to_string()), width_emu: Some(12_700) }),
+                        alt: Some("box".to_string()),
+                    },
+                )?;
+                let table = edit.add_table(
+                    &slide,
+                    TableElementInput {
+                        column_widths_emu: vec![1_270_000, 2_540_000],
+                        rows: vec![TableRow {
+                            height_emu: 508_000,
+                            cells: vec![TableCell::plain("A"), TableCell::plain("B")],
+                        }],
+                        transform: Some(Transform::from_points(30.0, 160.0, 300.0, 60.0).unwrap()),
+                        alt: Some("grid".to_string()),
+                    },
+                )?;
+                let asset = edit.add_asset("pixel.png", "image/png", vec![0x89, b'P', b'N', b'G'], None)?;
+                let image = edit.add_image(
+                    &slide,
+                    ImageElementInput {
+                        asset,
+                        transform: Some(Transform::from_points(40.0, 250.0, 100.0, 80.0).unwrap()),
+                        alt: "diagram".to_string(),
+                    },
+                )?;
+                ids = vec![
+                    text.as_str().to_string(),
+                    shape.as_str().to_string(),
+                    table.as_str().to_string(),
+                    image.as_str().to_string(),
+                ];
+                Ok(slide)
+            })
+            .expect("duplicate fixture builds");
+        (deck, slide.as_str().to_string(), ids)
+    }
+
+    #[test]
+    fn element_duplicate_copies_supported_kinds_to_the_end() {
+        let (mut deck, slide, sources) = duplicate_deck();
+        let before = slide_detail(&deck, &slide).expect("slide exists");
+        let revision = deck.revision();
+        let report = edit(
+            &mut deck,
+            &json!({
+                "operations": [
+                    {
+                        "op": "element.duplicate",
+                        "slideId": slide,
+                        "elementId": sources[0],
+                        "offsetXPt": 10.0,
+                        "offsetYPt": 20.0,
+                        "as": "textCopy",
+                    },
+                    {
+                        "op": "element.duplicate",
+                        "slideId": slide,
+                        "elementId": sources[1],
+                        "offsetXPt": 10.0,
+                        "offsetYPt": 20.0,
+                        "as": "shapeCopy",
+                    },
+                    {
+                        "op": "element.duplicate",
+                        "slideId": slide,
+                        "elementId": sources[2],
+                        "offsetXPt": 10.0,
+                        "offsetYPt": 20.0,
+                        "as": "tableCopy",
+                    },
+                    {
+                        "op": "element.duplicate",
+                        "slideId": slide,
+                        "elementId": sources[3],
+                        "offsetXPt": 10.0,
+                        "offsetYPt": 20.0,
+                        "as": "imageCopy",
+                    },
+                ],
+            }),
+        )
+        .expect("duplicates commit");
+
+        assert_eq!(report["revision"], revision + 1, "one script is one revision bump");
+        let copies = ["textCopy", "shapeCopy", "tableCopy", "imageCopy"]
+            .map(|token| report["resolved"][token].as_str().expect("resolved duplicate id").to_string());
+        let after = slide_detail(&deck, &slide).expect("slide exists");
+        for (source, copy) in sources.iter().zip(&copies) {
+            assert_ne!(source, copy, "each duplicate takes a fresh id");
+            let source_entry = element_entry(&before, source);
+            let copy_entry = element_entry(&after, copy);
+            assert_eq!(copy_entry["kind"], source_entry["kind"], "the duplicate keeps its kind");
+            assert_eq!(copy_entry["content"], source_entry["content"], "the duplicate keeps its content");
+            assert_eq!(copy_entry["alt"], source_entry["alt"], "the duplicate keeps its alternative text");
+            if let Some(text) = source_entry.get("text") {
+                assert_eq!(copy_entry["text"], *text, "the duplicate keeps its text");
+            }
+            let (x, y, width, height) = frame_of(&before, source);
+            assert_frame(&after, copy, (x + 10.0, y + 20.0, width, height));
+        }
+
+        let painted = element_ids(&deck, &slide);
+        assert_eq!(painted.len(), sources.len() + copies.len(), "four elements were appended");
+        assert_eq!(&painted[sources.len()..], &copies[..], "duplicates paint last in operation order");
+    }
+
+    #[test]
+    fn element_duplicate_without_offsets_keeps_the_transform() {
+        let mut deck = Deck::create(DeckCreateOptions::default());
+        let mut source = String::new();
+        let slide = deck
+            .transaction(None, |edit| {
+                let slide = edit.add_slide(SlideAddOptions { layout: None, index: None })?;
+                let mut transform = Transform::from_points(120.0, 80.0, 200.0, 60.0).unwrap();
+                transform.rotation_deg = Some(15.0);
+                let shape = edit.add_shape(
+                    &slide,
+                    ShapeElementInput {
+                        geometry: "rect".to_string(),
+                        transform: Some(transform),
+                        fill: Some(Fill::Solid { color: "#ABCDEF".to_string() }),
+                        line: None,
+                        alt: Some("rotated".to_string()),
+                    },
+                )?;
+                source = shape.as_str().to_string();
+                Ok(slide)
+            })
+            .expect("rotated shape builds");
+        let slide = slide.as_str().to_string();
+
+        let report = edit(
+            &mut deck,
+            &json!({
+                "operations": [{ "op": "element.duplicate", "slideId": slide, "elementId": source, "as": "copy" }],
+            }),
+        )
+        .expect("duplicate commits");
+        let copy = report["resolved"]["copy"].as_str().expect("resolved duplicate id");
+        let detail = slide_detail(&deck, &slide).expect("slide exists");
+        let source_transform = &element_entry(&detail, &source)["transform"];
+        let copy_transform = &element_entry(&detail, copy)["transform"];
+        assert_eq!(copy_transform, source_transform, "an absent offset leaves position, size and rotation untouched");
+        assert_eq!(copy_transform["rotationDeg"].as_f64(), Some(15.0));
+    }
+
+    #[test]
+    fn element_duplicate_rejects_unknown_targets_and_unsupported_kinds() {
+        let (mut deck, slide, sources) = duplicate_deck();
+        let revision = deck.revision();
+        let count = element_ids(&deck, &slide).len();
+
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [{ "op": "element.duplicate", "slideId": "slide-missing", "elementId": sources[0] }],
+            }),
+        )
+        .expect_err("an unknown slide is refused");
+        assert_eq!(error.code, "object/not-found");
+
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [{ "op": "element.duplicate", "slideId": slide, "elementId": "element-missing" }],
+            }),
+        )
+        .expect_err("an unknown element is refused");
+        assert_eq!(error.code, "object/not-found");
+
+        assert_eq!(deck.revision(), revision, "failed duplicates consume no revision");
+        assert_eq!(element_ids(&deck, &slide).len(), count, "failed duplicates append nothing");
+
+        let (mut deck, slide, chart) = chart_deck();
+        let revision = deck.revision();
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [{ "op": "element.duplicate", "slideId": slide, "elementId": chart }],
+            }),
+        )
+        .expect_err("charts are refused");
+        assert_eq!(error.code, "object/unsupported");
+        assert_eq!(deck.revision(), revision, "unsupported duplicates consume no revision");
+        assert_eq!(element_ids(&deck, &slide), vec![chart], "the slide is unchanged");
+    }
+
+    fn chart_deck() -> (Deck, String, String) {
+        let mut deck = Deck::create(DeckCreateOptions::default());
+        let mut chart_id = String::new();
+        let slide = deck
+            .transaction(None, |edit| {
+                let slide = edit.add_slide(SlideAddOptions { layout: None, index: None })?;
+                let chart = edit.add_chart(
+                    &slide,
+                    ChartElementInput {
+                        chart_type: ChartType::Column,
+                        data: ChartData {
+                            categories: vec!["A".to_string()],
+                            series: vec![ChartSeries { name: "S".to_string(), values: vec![1.0] }],
+                        },
+                        transform: Some(Transform::from_points(10.0, 10.0, 100.0, 80.0).unwrap()),
+                        alt: "chart".to_string(),
+                    },
+                )?;
+                chart_id = chart.as_str().to_string();
+                Ok(slide)
+            })
+            .expect("chart deck builds");
+        (deck, slide.as_str().to_string(), chart_id)
+    }
+
+    #[test]
+    fn a_failing_duplicate_rolls_back_the_whole_batch() {
+        let (mut deck, slide, sources) = duplicate_deck();
+        let revision = deck.revision();
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [
+                    { "op": "element.duplicate", "slideId": slide, "elementId": sources[0], "offsetXPt": 10.0 },
+                    { "op": "element.duplicate", "slideId": slide, "elementId": "element-missing" },
+                ],
+            }),
+        )
+        .expect_err("the second duplicate fails");
+        assert_eq!(error.code, "object/not-found");
+        assert_eq!(deck.revision(), revision, "no revision is consumed");
+        assert_eq!(element_ids(&deck, &slide), sources, "the first duplicate is rolled back");
     }
 }

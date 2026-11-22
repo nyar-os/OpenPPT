@@ -370,7 +370,30 @@ export interface ElementDistributeOperation {
 }
 
 /** Placement and stacking operations addressed to elements of one slide. */
-export type ElementOperation = ElementReorderOperation | ElementAlignOperation | ElementDistributeOperation;
+export type ElementOperation =
+    | ElementReorderOperation
+    | ElementDuplicateOperation
+    | ElementAlignOperation
+    | ElementDistributeOperation;
+
+/**
+ * Edit operation that rebuilds one element as a new element at the end of the
+ * slide, optionally shifted by a point offset.
+ *
+ * Text, shapes, tables and images are supported; charts, formulas, media,
+ * cropped images and placeholder-bound text answer with `object/unsupported`
+ * because the public authoring inputs cannot express them without data loss.
+ * An unknown slide or element answers with `object/not-found`.
+ */
+export interface ElementDuplicateOperation {
+    readonly op: 'element.duplicate';
+    readonly slideId: SlideId;
+    readonly elementId: ElementId;
+    /** Horizontal shift in points, default 0. */
+    readonly offsetXPt?: number;
+    /** Vertical shift in points, default 0. */
+    readonly offsetYPt?: number;
+}
 
 /**
  * Edit operation that moves one element to a zero-based paint index.
@@ -411,6 +434,8 @@ export interface ElementsApi {
     group(elementIds: readonly ElementId[], options?: { readonly alt?: string }): Promise<Element>;
     align(elementIds: readonly ElementId[], edge: AlignEdge, options?: { readonly relativeTo?: AlignReference }): Promise<void>;
     distribute(elementIds: readonly ElementId[], axis: DistributeAxis): Promise<void>;
+    /** Copies one element onto the end of the slide, optionally shifted in points. */
+    duplicate(elementId: ElementId, options?: { readonly offsetX?: number; readonly offsetY?: number }): Promise<Element>;
     zOrder(elementId: ElementId, order: ZOrder): Promise<void>;
     lock(elementId: ElementId, flags: LockFlags): Promise<void>;
 }
