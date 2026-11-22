@@ -46,6 +46,7 @@
             "wholeWord": "Only report matches delimited by non-word characters",
             "slideFilter": "Search only these slide ids (repeatable, comma-separated lists accepted)",
             "kindFilter": "Report only these hit kinds such as title, text or table (repeatable, comma-separated)",
+            "maxPerSlide": "Report at most this many matches per slide (positive integer)",
             "limit": "Maximum number of matches to report (positive integer, default 100)"
         },
         "error": {

@@ -318,6 +318,31 @@ test('search can be restricted to hit kinds', () => {
     assert.equal(searchSlides(slides, 'revenue', { kinds: ['notes'] }).length, 0);
 });
 
+test('search can cap hits per slide', () => {
+    const slides = [
+        {
+            id: 'slide-1',
+            index: 0,
+            title: 'Revenue revenue revenue',
+            elements: [{ id: 'text-1', kind: 'text', text: 'revenue revenue' }],
+        },
+        { id: 'slide-2', index: 1, title: 'Revenue plan', elements: [] },
+    ];
+
+    const capped = searchSlides(slides, 'revenue', { maxPerSlide: 2 });
+    assert.deepEqual(
+        capped.map((hit) => hit.slideId),
+        ['slide-1', 'slide-1', 'slide-2'],
+    );
+    assert.equal(capped.truncated, false, 'a per-slide cap is a filter, not a limit');
+
+    const one = searchSlides(slides, 'revenue', { maxPerSlide: 1 });
+    assert.deepEqual(
+        one.map((hit) => hit.slideId),
+        ['slide-1', 'slide-2'],
+    );
+});
+
 test('whole-word search skips matches inside longer words', () => {
     assert.deepEqual(
         findTextMatches('cat concat cat.', 'cat').map((match) => match.start),

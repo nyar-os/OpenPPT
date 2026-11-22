@@ -704,6 +704,11 @@ export interface SearchOptions {
      * kinds match nothing. Omitted means every kind.
      */
     readonly kinds?: readonly SearchHitKind[];
+    /**
+     * Report at most this many hits per slide. Hits beyond the cap are dropped
+     * without changing `truncated`, because the cap is a filter, not a limit.
+     */
+    readonly maxPerSlide?: number;
 }
 
 /**

@@ -580,6 +580,7 @@ cli
     .option('--whole-word', 'cli.opt.wholeWord')
     .option('--slide <id>...', 'cli.opt.slideFilter')
     .option('--kind <kind>...', 'cli.opt.kindFilter')
+    .option('--max-per-slide <n>', 'cli.opt.maxPerSlide')
     .option('--limit <n>', 'cli.opt.limit')
     .actionCtx(async (options, _args, ctx) => {
         const file = input(options);
@@ -600,6 +601,15 @@ cli
             }
             limit = value;
         }
+        const rawPerSlide = text(options, 'max-per-slide');
+        let maxPerSlide: number | undefined;
+        if (rawPerSlide !== undefined) {
+            const value = Number(rawPerSlide);
+            if (rawPerSlide.trim().length === 0 || !Number.isInteger(value) || value < 1) {
+                ctx.fail('cli.error.searchLimitInvalid');
+            }
+            maxPerSlide = value;
+        }
         await withSession(async (ppt) => {
             const deck = await ppt.open({ path: file });
             const slideIds = list(options, 'slide')
@@ -617,6 +627,7 @@ cli
                 wholeWord: flag(options, 'whole-word'),
                 ...(slideIds.length === 0 ? {} : { slideIds }),
                 ...(kinds.length === 0 ? {} : { kinds }),
+                ...(maxPerSlide === undefined ? {} : { maxPerSlide }),
                 ...(limit === undefined ? {} : { limit }),
             });
             ctx.emitResult(

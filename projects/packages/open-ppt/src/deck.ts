@@ -244,7 +244,8 @@ export class Deck {
      * matches delimited by non-word characters. `slideIds` restricts the
      * search to those slides, and unknown ids are ignored. `kinds` restricts
      * hits to those segment kinds, such as `['title', 'text']`; unknown kinds
-     * are ignored. `limit` (default
+     * are ignored. `maxPerSlide` caps hits per slide without setting
+     * `truncated`. `limit` (default
      * 100) caps the returned hits and sets `truncated` on the result array
      * when matches were dropped. An empty query or an invalid pattern is
      * `session/argument-invalid`.
@@ -279,6 +280,12 @@ export class Deck {
                 || options.kinds.some((kind) => typeof kind !== 'string' || kind.trim().length === 0))
         ) {
             throw new OpenPPTError('session/argument-invalid', '`kinds` must be an array of search hit kinds');
+        }
+        if (
+            options.maxPerSlide !== undefined
+            && (!Number.isInteger(options.maxPerSlide) || options.maxPerSlide < 1)
+        ) {
+            throw new OpenPPTError('session/argument-invalid', '`maxPerSlide` must be a positive integer');
         }
         const limit = options.limit ?? 100;
         if (!Number.isInteger(limit) || limit < 1) {

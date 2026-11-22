@@ -186,7 +186,8 @@ function isLowSurrogate(code: number): boolean {
  * when `notes` is set. `slideIds` restricts the search to those slides;
  * unknown ids simply match nothing. `wholeWord` drops matches that touch a
  * word character on either side. `kinds` restricts hits to those segment
- * kinds; unknown kinds simply match nothing.
+ * kinds; unknown kinds simply match nothing. `maxPerSlide` caps hits per
+ * slide without setting `truncated`, because it filters rather than limits.
  */
 export function searchSlides(
     slides: readonly TextSourceSlide[],
@@ -200,6 +201,8 @@ export function searchSlides(
     const limit = options.limit ?? 100;
     const only = options.slideIds === undefined ? undefined : new Set(options.slideIds);
     const onlyKinds = options.kinds === undefined ? undefined : new Set(options.kinds);
+    const maxPerSlide = options.maxPerSlide;
+    const seenPerSlide = new Map<string, number>();
     const hits: SearchHit[] = [];
     let truncated = false;
     for (const slide of slides) {
@@ -215,6 +218,11 @@ export function searchSlides(
                     truncated = true;
                     break;
                 }
+                const taken = seenPerSlide.get(slide.id) ?? 0;
+                if (maxPerSlide !== undefined && taken >= maxPerSlide) {
+                    continue;
+                }
+                seenPerSlide.set(slide.id, taken + 1);
                 hits.push({
                     slideId: slide.id,
                     slideIndex: slide.index,
