@@ -1,6 +1,10 @@
 # Agent guide: OpenPPT
 
-How an agent discovers capabilities, drives the `open-ppt` CLI and speaks the edit-operation JSON shape. The CLI is the stable automation surface; the SDK exposes the same operations through `@wae/open-ppt`.
+How an agent discovers capabilities, drives the `open-ppt` CLI and composes the `@wae/open-ppt` SDK. The CLI is the reliable surface for short, one-shot tasks such as `create`, `open`, `play`, `render` and `export`; complex editing is a TypeScript workflow built on `new OpenPPT()`.
+
+- **GUI** (`open-ppt open <file>`, `open-ppt play <file>`): humans review layout, drag elements and run the show.
+- **SDK**: anything data-driven or repeated — slide and element edits, notes, charts, inspection loops, previews, save and export.
+- **Not delivered yet**: theme/layout enumeration and application, asset removal, playback object creation, autofit text, and slide layout changes. The engine reports these as `object/unsupported` with a feature name.
 
 ## Discover capabilities first
 
@@ -26,7 +30,7 @@ Binary: `open-ppt` (`projects/packages/open-ppt/dist/cli.js`). Global flags: `--
 | `render <file> --out <dir>` | Render every slide to standalone SVG | `--format svg` |
 | `contact-sheet <file> --out <svg>` | Render all slides into one SVG sheet | `--columns <n>` (default 3) |
 | `export <file> --format <fmt> --out <file>` | Write PPTX, PPSX, POTX or PDF | `--overwrite` |
-| `edit <file>` | Apply one atomic JSON edit script | `--ops <json>`, `--script <file>`, `--out <file>`, `--overwrite`, `--expected-revision <n>` |
+| `edit <file>` | Compatibility only: apply one atomic JSON edit script. New work should call `Deck.edit()` from a TypeScript script instead | `--ops <json>`, `--script <file>`, `--out <file>`, `--overwrite`, `--expected-revision <n>` |
 | `slide <file> <slideId>` | Print one slide and its elements | — |
 | `search <file> <query>` | Search visible text, or speaker notes with `--notes`, across slides | `--case-sensitive`, `--regex`, `--notes`, `--whole-word`, `--slide <id>` (repeatable, comma lists accepted; unknown ids ignored), `--kind <kind>` (repeatable, comma lists accepted; unknown kinds ignored), `--max-per-slide <n>`, `--limit <n>` (default 100) |
 | `outline <file>` | Print the slide outline without rendering | `--points` |
@@ -37,6 +41,55 @@ Binary: `open-ppt` (`projects/packages/open-ppt/dist/cli.js`). Global flags: `--
 Project files are native deck files (for example `review.oppt`). Export formats currently are `pptx`, `ppsx`, `potx` and `pdf`.
 
 Every `search` hit carries `text` (the whole title, element, table or notes unit), `start` and `length` (UTF-16 offsets inside `text`), and `context`: an excerpt with up to 40 characters on each side of the match, with `…` marking a clipped edge. `context` never splits a surrogate pair, so it is safe to print without re-slicing the full `text`.
+
+## Recommended workflows
+
+A user-facing session starts with one command:
+
+```bash
+open-ppt create review.oppt --title "Q4 review" --slide Highlights --slide Revenue --overwrite
+open-ppt open review.oppt
+```
+
+Anything that positions elements, reacts to inspection findings or fills slides from data belongs in a script. The script edits by slide and element id, previews the current revision, fixes only the reported objects and then saves or exports. `edit --ops` and `edit --script` remain for compatibility with existing callers, but they are no longer the recommended agent path.
+
+```ts
+import { OpenPPT } from '@wae/open-ppt';
+
+const ppt = new OpenPPT();
+const deck = await ppt.create({ title: 'Q4 review', slides: ['Highlights', 'Revenue'] });
+const [firstId, secondId] = deck.summary().slides.map((slide) => slide.id);
+const first = await deck.slides.get(firstId);
+const second = await deck.slides.get(secondId);
+
+await first.title.set('Q4 highlights');
+await first.notes.set('Lead with the 18% revenue lift.');
+await first.elements.addText({
+    text: 'Revenue is up 18%',
+    transform: { xPt: 72, yPt: 140, widthPt: 480, heightPt: 90 },
+});
+await second.elements.addText({ text: 'Plan: expand to two regions in Q1' });
+
+// Inspect the current revision, then fix only the object that was reported.
+const inspection = await deck.inspect({ checks: ['overflow'] });
+for (const issue of inspection.issues) {
+    if (issue.elementId !== undefined) {
+        await first.elements.update(issue.elementId, { text: 'Revenue is up 18%' });
+    }
+}
+
+// Preview, export an exchange format, save the native project and reopen it.
+await deck.render({ format: 'svg', target: 'preview' });
+await deck.export({ format: 'pptx', target: 'q4.pptx', overwrite: true });
+await deck.save({ target: 'q4.oppt', overwrite: true });
+await deck.close();
+
+const reopened = await ppt.open({ path: 'q4.oppt' });
+console.log(reopened.summary().revision, reopened.summary().slides.length);
+await reopened.close();
+```
+
+`body` and the second slide id are real values returned by the engine; never invent ids. Report `export().losses` instead of claiming a lossless conversion.
 
 ## Edit script shape
 
