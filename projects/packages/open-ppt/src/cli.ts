@@ -574,6 +574,7 @@ cli.command('slide', 'cli.cmd.slide').actionCtx(async (options, _args, ctx) => {
 cli
     .command('search', 'cli.cmd.search')
     .option('--case-sensitive', 'cli.opt.caseSensitive')
+    .option('--regex', 'cli.opt.regex')
     .option('--limit <n>', 'cli.opt.limit')
     .actionCtx(async (options, _args, ctx) => {
         const file = input(options);
@@ -598,6 +599,7 @@ cli
             const deck = await ppt.open({ path: file });
             const hits = await deck.search(query, {
                 caseSensitive: flag(options, 'case-sensitive'),
+                regex: flag(options, 'regex'),
                 ...(limit === undefined ? {} : { limit }),
             });
             ctx.emitResult(

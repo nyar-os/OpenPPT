@@ -238,9 +238,11 @@ export class Deck {
     /**
      * Finds visible text across every slide, without rendering.
      *
-     * Matching is case-insensitive by default. `limit` (default 100) caps the
-     * returned hits and sets `truncated` on the result array when matches were
-     * dropped. An empty query is `session/argument-invalid`.
+     * Matching is case-insensitive by default. With `regex: true`, `query` is a
+     * JavaScript pattern whose matches are reported by offset and length.
+     * `limit` (default 100) caps the returned hits and sets `truncated` on the
+     * result array when matches were dropped. An empty query or an invalid
+     * pattern is `session/argument-invalid`.
      */
     async search(query: string, options: SearchOptions = {}): Promise<SearchHitList> {
         this.assertOpen('deck.search');
@@ -249,6 +251,9 @@ export class Deck {
         }
         if (options.caseSensitive !== undefined && typeof options.caseSensitive !== 'boolean') {
             throw new OpenPPTError('session/argument-invalid', '`caseSensitive` must be a boolean');
+        }
+        if (options.regex !== undefined && typeof options.regex !== 'boolean') {
+            throw new OpenPPTError('session/argument-invalid', '`regex` must be a boolean');
         }
         const limit = options.limit ?? 100;
         if (!Number.isInteger(limit) || limit < 1) {

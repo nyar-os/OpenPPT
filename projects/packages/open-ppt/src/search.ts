@@ -6,6 +6,7 @@
  * testable without an installed addon and keeps rendering out of the path.
  */
 
+import { OpenPPTError } from './errors.js';
 import type { ElementKind, SearchHit, SearchHitKind, SearchHitList, SearchOptions } from './types.js';
 
 /** Structural slide shape accepted by {@link collectTextSegments}. */
@@ -75,13 +76,30 @@ export function collectTextSegments(slide: TextSourceSlide): TextSegment[] {
  * Finds every non-overlapping occurrence of `query` in `text`.
  *
  * Matching uses a Unicode-aware regular expression, so offsets stay valid in
- * the original string even when case folding would change its length.
+ * the original string even when case folding would change its length. With
+ * `regex`, `query` is used as the pattern instead of being escaped; an invalid
+ * pattern throws `session/argument-invalid`.
  */
-export function findTextMatches(text: string, query: string, caseSensitive = false): TextMatch[] {
+export function findTextMatches(
+    text: string,
+    query: string,
+    caseSensitive = false,
+    regex = false,
+): TextMatch[] {
     if (text.length === 0 || query.length === 0) {
         return [];
     }
-    const pattern = new RegExp(escapeForRegExp(query), caseSensitive ? 'gu' : 'giu');
+    const source = regex ? query : escapeForRegExp(query);
+    let pattern: RegExp;
+    try {
+        pattern = new RegExp(source, caseSensitive ? 'gu' : 'giu');
+    }
+    catch (error) {
+        throw new OpenPPTError(
+            'session/argument-invalid',
+            `\`query\` is not a valid regular expression: ${error instanceof Error ? error.message : String(error)}`,
+        );
+    }
     const matches: TextMatch[] = [];
     for (const match of text.matchAll(pattern)) {
         if (match.index === undefined || match[0].length === 0) {
@@ -104,12 +122,13 @@ export function searchSlides(
     options: SearchOptions = {},
 ): SearchHitList {
     const caseSensitive = options.caseSensitive ?? false;
+    const regex = options.regex ?? false;
     const limit = options.limit ?? 100;
     const hits: SearchHit[] = [];
     let truncated = false;
     for (const slide of slides) {
         for (const segment of collectTextSegments(slide)) {
-            for (const match of findTextMatches(segment.text, query, caseSensitive)) {
+            for (const match of findTextMatches(segment.text, query, caseSensitive, regex)) {
                 if (hits.length >= limit) {
                     truncated = true;
                     break;

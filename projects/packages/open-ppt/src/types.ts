@@ -689,6 +689,8 @@ export type SearchHitKind = ElementKind | 'title';
 export interface SearchOptions {
     /** Match exact letter case; defaults to `false`. */
     readonly caseSensitive?: boolean;
+    /** Treat `query` as a regular expression instead of literal text; defaults to `false`. */
+    readonly regex?: boolean;
     /** Maximum hits to return; defaults to 100. */
     readonly limit?: number;
 }

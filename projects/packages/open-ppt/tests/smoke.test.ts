@@ -195,6 +195,35 @@ test('matching honours case, offsets and literal query text', () => {
     assert.deepEqual(findTextMatches('plain', 'missing'), []);
 });
 
+test('pattern search matches regular expressions and rejects invalid ones', () => {
+    assert.deepEqual(findTextMatches('12 and 34', '\\d+', false, true), [
+        { start: 0, length: 2 },
+        { start: 7, length: 2 },
+    ]);
+    assert.deepEqual(findTextMatches('Revenue plan', 'revenue|plan', false, true), [
+        { start: 0, length: 7 },
+        { start: 8, length: 4 },
+    ]);
+    assert.deepEqual(findTextMatches('Revenue', 'revenue', true, true), []);
+    assert.throws(
+        () => findTextMatches('text', '(', false, true),
+        (error: unknown) => error instanceof OpenPPTError && error.code === 'session/argument-invalid',
+    );
+
+    const slides = [
+        { id: 'slide-1', index: 0, title: 'Revenue 12%', elements: [] },
+        { id: 'slide-2', index: 1, title: 'Plan 34%', elements: [] },
+    ];
+    const hits = searchSlides(slides, '\\d+%', { regex: true });
+    assert.deepEqual(
+        hits.map((hit) => [hit.slideId, hit.start, hit.length]),
+        [
+            ['slide-1', 8, 3],
+            ['slide-2', 5, 3],
+        ],
+    );
+});
+
 test('deck search walks slides in order and truncates at the limit', () => {
     const slides = [
         {
