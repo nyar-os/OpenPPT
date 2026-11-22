@@ -576,6 +576,7 @@ cli
     .option('--case-sensitive', 'cli.opt.caseSensitive')
     .option('--regex', 'cli.opt.regex')
     .option('--notes', 'cli.opt.notes')
+    .option('--whole-word', 'cli.opt.wholeWord')
     .option('--slide <id>...', 'cli.opt.slideFilter')
     .option('--limit <n>', 'cli.opt.limit')
     .actionCtx(async (options, _args, ctx) => {
@@ -607,6 +608,7 @@ cli
                 caseSensitive: flag(options, 'case-sensitive'),
                 regex: flag(options, 'regex'),
                 notes: flag(options, 'notes'),
+                wholeWord: flag(options, 'whole-word'),
                 ...(slideIds.length === 0 ? {} : { slideIds }),
                 ...(limit === undefined ? {} : { limit }),
             });

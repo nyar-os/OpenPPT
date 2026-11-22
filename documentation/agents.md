@@ -28,7 +28,7 @@ Binary: `open-ppt` (`projects/packages/open-ppt/dist/cli.js`). Global flags: `--
 | `export <file> --format <fmt> --out <file>` | Write PPTX, PPSX, POTX or PDF | `--overwrite` |
 | `edit <file>` | Apply one atomic JSON edit script | `--ops <json>`, `--script <file>`, `--out <file>`, `--overwrite`, `--expected-revision <n>` |
 | `slide <file> <slideId>` | Print one slide and its elements | — |
-| `search <file> <query>` | Search visible text, or speaker notes with `--notes`, across slides | `--case-sensitive`, `--regex`, `--notes`, `--slide <id>` (repeatable, comma lists accepted; unknown ids ignored), `--limit <n>` (default 100) |
+| `search <file> <query>` | Search visible text, or speaker notes with `--notes`, across slides | `--case-sensitive`, `--regex`, `--notes`, `--whole-word`, `--slide <id>` (repeatable, comma lists accepted; unknown ids ignored), `--limit <n>` (default 100) |
 | `outline <file>` | Print the slide outline without rendering | `--points` |
 | `assets <file>` | List embedded assets | — |
 | `undo <file>` / `redo <file>` | Move one committed revision backward or forward | `--out <file>`, `--overwrite` |

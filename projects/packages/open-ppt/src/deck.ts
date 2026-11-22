@@ -240,7 +240,8 @@ export class Deck {
      *
      * Matching is case-insensitive by default. With `regex: true`, `query` is a
      * JavaScript pattern whose matches are reported by offset and length.
-     * `notes: true` also searches speaker notes. `slideIds` restricts the
+     * `notes: true` also searches speaker notes. `wholeWord: true` only reports
+     * matches delimited by non-word characters. `slideIds` restricts the
      * search to those slides, and unknown ids are ignored. `limit` (default
      * 100) caps the returned hits and sets `truncated` on the result array
      * when matches were dropped. An empty query or an invalid pattern is
@@ -259,6 +260,9 @@ export class Deck {
         }
         if (options.notes !== undefined && typeof options.notes !== 'boolean') {
             throw new OpenPPTError('session/argument-invalid', '`notes` must be a boolean');
+        }
+        if (options.wholeWord !== undefined && typeof options.wholeWord !== 'boolean') {
+            throw new OpenPPTError('session/argument-invalid', '`wholeWord` must be a boolean');
         }
         if (
             options.slideIds !== undefined

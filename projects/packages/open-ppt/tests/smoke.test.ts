@@ -289,6 +289,27 @@ test('search can be restricted to listed slides', () => {
     assert.equal(searchSlides(slides, 'revenue', { slideIds: [] }).length, 0);
 });
 
+test('whole-word search skips matches inside longer words', () => {
+    assert.deepEqual(
+        findTextMatches('cat concat cat.', 'cat').map((match) => match.start),
+        [0, 7, 11],
+    );
+    assert.deepEqual(
+        findTextMatches('cat concat cat.', 'cat', false, false, true).map((match) => match.start),
+        [0, 11],
+    );
+    assert.deepEqual(
+        findTextMatches('CAT cat_cat Cat', 'cat', false, false, true).map((match) => match.start),
+        [0, 12],
+    );
+
+    const slides = [{ id: 'slide-1', index: 0, title: 'Concat the cat', elements: [] }];
+    assert.deepEqual(
+        searchSlides(slides, 'cat', { wholeWord: true }).map((hit) => hit.start),
+        [11],
+    );
+});
+
 test('search hits carry a bounded excerpt around the match', () => {
     const long = `${'a'.repeat(60)}needle${'b'.repeat(60)}`;
     const [hit] = searchSlides([{ id: 'slide-1', index: 0, title: long, elements: [] }], 'needle');

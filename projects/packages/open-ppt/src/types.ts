@@ -693,6 +693,8 @@ export interface SearchOptions {
     readonly regex?: boolean;
     /** Also search speaker notes; defaults to `false`, which searches visible text only. */
     readonly notes?: boolean;
+    /** Require a match to be delimited by non-word characters; defaults to `false`. */
+    readonly wholeWord?: boolean;
     /** Maximum hits to return; defaults to 100. */
     readonly limit?: number;
     /** Search only these slide ids, in deck order; unknown ids are ignored. */

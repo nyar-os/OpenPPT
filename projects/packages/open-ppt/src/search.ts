@@ -84,13 +84,15 @@ export function collectTextSegments(slide: TextSourceSlide, includeNotes = false
  * Matching uses a Unicode-aware regular expression, so offsets stay valid in
  * the original string even when case folding would change its length. With
  * `regex`, `query` is used as the pattern instead of being escaped; an invalid
- * pattern throws `session/argument-invalid`.
+ * pattern throws `session/argument-invalid`. With `wholeWord`, a match must be
+ * delimited by non-word characters on both sides.
  */
 export function findTextMatches(
     text: string,
     query: string,
     caseSensitive = false,
     regex = false,
+    wholeWord = false,
 ): TextMatch[] {
     if (text.length === 0 || query.length === 0) {
         return [];
@@ -111,9 +113,43 @@ export function findTextMatches(
         if (match.index === undefined || match[0].length === 0) {
             continue;
         }
+        if (wholeWord && !delimitedByNonWord(text, match.index, match[0].length)) {
+            continue;
+        }
         matches.push({ start: match.index, length: match[0].length });
     }
     return matches;
+}
+
+const WORD_CHARACTER = /^[\p{L}\p{N}_]$/u;
+
+/** Whether the characters around a match are absent or non-word characters. */
+function delimitedByNonWord(text: string, start: number, length: number): boolean {
+    const before = characterBefore(text, start);
+    const after = characterAt(text, start + length);
+    return (before === undefined || !WORD_CHARACTER.test(before)) && (after === undefined || !WORD_CHARACTER.test(after));
+}
+
+function characterBefore(text: string, index: number): string | undefined {
+    if (index <= 0) {
+        return undefined;
+    }
+    const last = text.charCodeAt(index - 1);
+    if (isLowSurrogate(last) && index >= 2) {
+        return text.slice(index - 2, index);
+    }
+    return text.slice(index - 1, index);
+}
+
+function characterAt(text: string, index: number): string | undefined {
+    if (index >= text.length) {
+        return undefined;
+    }
+    const first = text.charCodeAt(index);
+    if (first >= 0xd800 && first <= 0xdbff && index + 1 < text.length) {
+        return text.slice(index, index + 2);
+    }
+    return text.slice(index, index + 1);
 }
 
 /** Characters of surrounding text kept on each side of a search hit. */
@@ -148,7 +184,8 @@ function isLowSurrogate(code: number): boolean {
  * `limit` (default 100) caps the list; the returned array carries
  * `truncated: true` when matches were dropped. Speaker notes join the search
  * when `notes` is set. `slideIds` restricts the search to those slides;
- * unknown ids simply match nothing.
+ * unknown ids simply match nothing. `wholeWord` drops matches that touch a
+ * word character on either side.
  */
 export function searchSlides(
     slides: readonly TextSourceSlide[],
@@ -158,6 +195,7 @@ export function searchSlides(
     const caseSensitive = options.caseSensitive ?? false;
     const regex = options.regex ?? false;
     const notes = options.notes ?? false;
+    const wholeWord = options.wholeWord ?? false;
     const limit = options.limit ?? 100;
     const only = options.slideIds === undefined ? undefined : new Set(options.slideIds);
     const hits: SearchHit[] = [];
@@ -167,7 +205,7 @@ export function searchSlides(
             continue;
         }
         for (const segment of collectTextSegments(slide, notes)) {
-            for (const match of findTextMatches(segment.text, query, caseSensitive, regex)) {
+            for (const match of findTextMatches(segment.text, query, caseSensitive, regex, wholeWord)) {
                 if (hits.length >= limit) {
                     truncated = true;
                     break;
