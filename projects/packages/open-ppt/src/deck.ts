@@ -242,7 +242,9 @@ export class Deck {
      * JavaScript pattern whose matches are reported by offset and length.
      * `notes: true` also searches speaker notes. `wholeWord: true` only reports
      * matches delimited by non-word characters. `slideIds` restricts the
-     * search to those slides, and unknown ids are ignored. `limit` (default
+     * search to those slides, and unknown ids are ignored. `kinds` restricts
+     * hits to those segment kinds, such as `['title', 'text']`; unknown kinds
+     * are ignored. `limit` (default
      * 100) caps the returned hits and sets `truncated` on the result array
      * when matches were dropped. An empty query or an invalid pattern is
      * `session/argument-invalid`.
@@ -270,6 +272,13 @@ export class Deck {
                 || options.slideIds.some((id) => typeof id !== 'string' || id.trim().length === 0))
         ) {
             throw new OpenPPTError('session/argument-invalid', '`slideIds` must be an array of slide ids');
+        }
+        if (
+            options.kinds !== undefined
+            && (!Array.isArray(options.kinds)
+                || options.kinds.some((kind) => typeof kind !== 'string' || kind.trim().length === 0))
+        ) {
+            throw new OpenPPTError('session/argument-invalid', '`kinds` must be an array of search hit kinds');
         }
         const limit = options.limit ?? 100;
         if (!Number.isInteger(limit) || limit < 1) {

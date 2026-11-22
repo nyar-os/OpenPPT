@@ -185,7 +185,8 @@ function isLowSurrogate(code: number): boolean {
  * `truncated: true` when matches were dropped. Speaker notes join the search
  * when `notes` is set. `slideIds` restricts the search to those slides;
  * unknown ids simply match nothing. `wholeWord` drops matches that touch a
- * word character on either side.
+ * word character on either side. `kinds` restricts hits to those segment
+ * kinds; unknown kinds simply match nothing.
  */
 export function searchSlides(
     slides: readonly TextSourceSlide[],
@@ -198,6 +199,7 @@ export function searchSlides(
     const wholeWord = options.wholeWord ?? false;
     const limit = options.limit ?? 100;
     const only = options.slideIds === undefined ? undefined : new Set(options.slideIds);
+    const onlyKinds = options.kinds === undefined ? undefined : new Set(options.kinds);
     const hits: SearchHit[] = [];
     let truncated = false;
     for (const slide of slides) {
@@ -205,6 +207,9 @@ export function searchSlides(
             continue;
         }
         for (const segment of collectTextSegments(slide, notes)) {
+            if (onlyKinds !== undefined && !onlyKinds.has(segment.kind)) {
+                continue;
+            }
             for (const match of findTextMatches(segment.text, query, caseSensitive, regex, wholeWord)) {
                 if (hits.length >= limit) {
                     truncated = true;

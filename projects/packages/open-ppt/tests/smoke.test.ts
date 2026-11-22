@@ -289,6 +289,35 @@ test('search can be restricted to listed slides', () => {
     assert.equal(searchSlides(slides, 'revenue', { slideIds: [] }).length, 0);
 });
 
+test('search can be restricted to hit kinds', () => {
+    const slides = [
+        {
+            id: 'slide-1',
+            index: 0,
+            title: 'Revenue overview',
+            elements: [{ id: 'text-1', kind: 'text', text: 'Revenue is up' }],
+        },
+    ];
+
+    const titles = searchSlides(slides, 'revenue', { kinds: ['title'] });
+    assert.deepEqual(
+        titles.map((hit) => [hit.slideId, hit.kind]),
+        [['slide-1', 'title']],
+    );
+
+    const text = searchSlides(slides, 'revenue', { kinds: ['text'] });
+    assert.deepEqual(
+        text.map((hit) => hit.kind),
+        ['text'],
+    );
+
+    const both = searchSlides(slides, 'revenue', { kinds: ['title', 'text'] });
+    assert.equal(both.length, 2);
+
+    assert.equal(searchSlides(slides, 'revenue', { kinds: [] }).length, 0);
+    assert.equal(searchSlides(slides, 'revenue', { kinds: ['notes'] }).length, 0);
+});
+
 test('whole-word search skips matches inside longer words', () => {
     assert.deepEqual(
         findTextMatches('cat concat cat.', 'cat').map((match) => match.start),

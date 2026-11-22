@@ -699,6 +699,11 @@ export interface SearchOptions {
     readonly limit?: number;
     /** Search only these slide ids, in deck order; unknown ids are ignored. */
     readonly slideIds?: readonly SlideId[];
+    /**
+     * Report only hits of these kinds, such as `['title', 'text']`; unknown
+     * kinds match nothing. Omitted means every kind.
+     */
+    readonly kinds?: readonly SearchHitKind[];
 }
 
 /**

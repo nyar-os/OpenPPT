@@ -34,6 +34,7 @@ import type {
     InspectReport,
     OpenPPTCapabilities,
     SaveReport,
+    SearchHitKind,
 } from './types.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -578,6 +579,7 @@ cli
     .option('--notes', 'cli.opt.notes')
     .option('--whole-word', 'cli.opt.wholeWord')
     .option('--slide <id>...', 'cli.opt.slideFilter')
+    .option('--kind <kind>...', 'cli.opt.kindFilter')
     .option('--limit <n>', 'cli.opt.limit')
     .actionCtx(async (options, _args, ctx) => {
         const file = input(options);
@@ -604,12 +606,17 @@ cli
                 .flatMap((entry) => entry.split(','))
                 .map((entry) => entry.trim())
                 .filter((entry) => entry.length > 0);
+            const kinds = list(options, 'kind')
+                .flatMap((entry) => entry.split(','))
+                .map((entry) => entry.trim())
+                .filter((entry) => entry.length > 0) as SearchHitKind[];
             const hits = await deck.search(query, {
                 caseSensitive: flag(options, 'case-sensitive'),
                 regex: flag(options, 'regex'),
                 notes: flag(options, 'notes'),
                 wholeWord: flag(options, 'whole-word'),
                 ...(slideIds.length === 0 ? {} : { slideIds }),
+                ...(kinds.length === 0 ? {} : { kinds }),
                 ...(limit === undefined ? {} : { limit }),
             });
             ctx.emitResult(
