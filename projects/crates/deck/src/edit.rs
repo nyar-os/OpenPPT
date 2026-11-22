@@ -537,12 +537,20 @@ impl EditState {
 
     /// Rebuilds the source content as a new element at the end of the slide.
     ///
-    /// Only content the public `add_*` inputs can express is duplicated, so an
-    /// element that would lose crop, placeholder or alt data is refused instead
-    /// of being copied partially.
+    /// `targetSlideId` may name another slide; the rebuilt element keeps the
+    /// source transform plus any offset. Only content the public `add_*` inputs
+    /// can express is duplicated, so an element that would lose crop,
+    /// placeholder or alt data is refused instead of being copied partially.
     fn duplicate_element(&mut self, draft: &mut DeckEdit, operation: &Value) -> Result<String, DeckError> {
         let slide = self.slide(operation)?;
         let element = self.element(operation)?;
+        let target = match operation.get("targetSlideId") {
+            Some(value) => self.slide_id_value(value)?,
+            None => slide.clone(),
+        };
+        if draft.document().slide(&target).is_none() {
+            return Err(missing_slide(&target));
+        }
         let source = {
             let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
             model.element(&element).cloned().ok_or_else(|| {
@@ -564,7 +572,7 @@ impl EditState {
                     ));
                 }
                 draft.add_text(
-                    &slide,
+                    &target,
                     TextElementInput { text: text.clone(), transform: Some(transform), alt: source.alt.clone(), placeholder: None },
                 )?
             }
@@ -577,10 +585,10 @@ impl EditState {
                     .clone()
                     .filter(|alt| !alt.trim().is_empty())
                     .ok_or_else(|| unsupported_element(&slide, &element, "images without alternative text cannot be rebuilt through `image.add`"))?;
-                draft.add_image(&slide, ImageElementInput { asset: image.asset.clone(), transform: Some(transform), alt })?
+                draft.add_image(&target, ImageElementInput { asset: image.asset.clone(), transform: Some(transform), alt })?
             }
             ElementContent::Shape(shape) => draft.add_shape(
-                &slide,
+                &target,
                 ShapeElementInput {
                     geometry: shape.geometry.clone(),
                     transform: Some(transform),
@@ -590,7 +598,7 @@ impl EditState {
                 },
             )?,
             ElementContent::Table(table) => draft.add_table(
-                &slide,
+                &target,
                 TableElementInput {
                     column_widths_emu: table.column_widths_emu.clone(),
                     rows: table.rows.clone(),
@@ -2011,6 +2019,64 @@ mod tests {
         let copy_transform = &element_entry(&detail, copy)["transform"];
         assert_eq!(copy_transform, source_transform, "an absent offset leaves position, size and rotation untouched");
         assert_eq!(copy_transform["rotationDeg"].as_f64(), Some(15.0));
+    }
+
+    #[test]
+    fn element_duplicate_can_target_another_slide() {
+        let (mut deck, slide, sources) = duplicate_deck();
+        let target = deck
+            .transaction(None, |edit| edit.add_slide(SlideAddOptions { layout: None, index: None }))
+            .expect("second slide builds")
+            .as_str()
+            .to_string();
+        let before = element_ids(&deck, &slide).len();
+
+        let report = edit(
+            &mut deck,
+            &json!({
+                "operations": [{
+                    "op": "element.duplicate",
+                    "slideId": slide,
+                    "elementId": sources[1],
+                    "targetSlideId": target,
+                    "offsetXPt": 5.0,
+                    "as": "copy",
+                }],
+            }),
+        )
+        .expect("cross-slide duplicate commits");
+        let copy = report["resolved"]["copy"].as_str().expect("resolved duplicate id");
+
+        assert_eq!(element_ids(&deck, &slide).len(), before, "the source slide keeps its elements");
+        assert_eq!(element_ids(&deck, &target), vec![copy.to_string()], "the copy lands on the target slide");
+        let source_detail = slide_detail(&deck, &slide).expect("source exists");
+        let target_detail = slide_detail(&deck, &target).expect("target exists");
+        let source_entry = element_entry(&source_detail, &sources[1]);
+        let copy_entry = element_entry(&target_detail, copy);
+        let source_x = source_entry["transform"]["xPt"].as_f64().expect("source x");
+        let copy_x = copy_entry["transform"]["xPt"].as_f64().expect("copy x");
+        assert!((copy_x - source_x - 5.0).abs() < 0.01, "the requested offset applies");
+        assert_eq!(copy_entry["geometry"], source_entry["geometry"], "the shape is rebuilt faithfully");
+    }
+
+    #[test]
+    fn element_duplicate_rejects_unknown_target_slides() {
+        let (mut deck, slide, sources) = duplicate_deck();
+        let revision = deck.revision();
+        let error = edit(
+            &mut deck,
+            &json!({
+                "operations": [{
+                    "op": "element.duplicate",
+                    "slideId": slide,
+                    "elementId": sources[0],
+                    "targetSlideId": "slide-missing",
+                }],
+            }),
+        )
+        .expect_err("an unknown target slide is refused");
+        assert_eq!(error.code, "object/not-found");
+        assert_eq!(deck.revision(), revision, "failed duplicates consume no revision");
     }
 
     #[test]

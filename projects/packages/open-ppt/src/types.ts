@@ -389,6 +389,8 @@ export interface ElementDuplicateOperation {
     readonly op: 'element.duplicate';
     readonly slideId: SlideId;
     readonly elementId: ElementId;
+    /** Slide that receives the copy, default the source slide. */
+    readonly targetSlideId?: SlideId;
     /** Horizontal shift in points, default 0. */
     readonly offsetXPt?: number;
     /** Vertical shift in points, default 0. */
@@ -434,8 +436,11 @@ export interface ElementsApi {
     group(elementIds: readonly ElementId[], options?: { readonly alt?: string }): Promise<Element>;
     align(elementIds: readonly ElementId[], edge: AlignEdge, options?: { readonly relativeTo?: AlignReference }): Promise<void>;
     distribute(elementIds: readonly ElementId[], axis: DistributeAxis): Promise<void>;
-    /** Copies one element onto the end of the slide, optionally shifted in points. */
-    duplicate(elementId: ElementId, options?: { readonly offsetX?: number; readonly offsetY?: number }): Promise<Element>;
+    /** Copies one element onto the end of a slide, optionally shifted in points. */
+    duplicate(
+        elementId: ElementId,
+        options?: { readonly toSlideId?: SlideId; readonly offsetX?: number; readonly offsetY?: number },
+    ): Promise<Element>;
     zOrder(elementId: ElementId, order: ZOrder): Promise<void>;
     lock(elementId: ElementId, flags: LockFlags): Promise<void>;
 }

@@ -696,12 +696,13 @@ class ElementsView {
 
     async duplicate(
         elementId: ElementId,
-        options?: { readonly offsetX?: number; readonly offsetY?: number },
+        options?: { readonly toSlideId?: SlideId; readonly offsetX?: number; readonly offsetY?: number },
     ): Promise<Element> {
         return this.commit({
             op: 'element.duplicate',
             slideId: this.slideId,
             elementId,
+            targetSlideId: options?.toSlideId,
             offsetXPt: options?.offsetX,
             offsetYPt: options?.offsetY,
         });

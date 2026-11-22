@@ -81,9 +81,10 @@ other operation.
 
 `element.duplicate` rebuilds one text, shape, table or image element as a new
 element at the end of the slide, optionally shifted by `offsetXPt`/`offsetYPt`
-(the SDK calls them `offsetX`/`offsetY`). Charts, formulas, media, cropped
-images and placeholder-bound text are refused with `object/unsupported` instead
-of being copied partially.
+(the SDK calls them `offsetX`/`offsetY`). `targetSlideId` (`toSlideId` in the
+SDK) copies it onto another slide while leaving the source untouched. Charts,
+formulas, media, cropped images and placeholder-bound text are refused with
+`object/unsupported` instead of being copied partially.
 
 ```ts
 import { OpenPPT } from '@wae/open-ppt';
