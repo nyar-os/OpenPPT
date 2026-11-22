@@ -40,6 +40,7 @@
             "expectedRevision": "Reject the edit unless the deck is at this committed revision",
             "contactSheetOut": "SVG file to write the contact sheet to",
             "contactSheetColumns": "Thumbnail columns (positive integer, default 3)",
+            "slidePages": "One-based slide numbers to keep, comma-separated such as 1,3 (default: all)",
             "caseSensitive": "Match text with exact letter case",
             "regex": "Treat the query as a regular expression instead of literal text",
             "notes": "Also search speaker notes, not just visible slide text",
@@ -52,6 +53,7 @@
         "error": {
             "contactSheetOutMissing": "`--out <file>` is required",
             "contactSheetColumnsInvalid": "`--columns <n>` must be a positive integer",
+            "slidePagesInvalid": "`--pages` needs one-based slide numbers such as 1,3",
             "searchQueryMissing": "a search query is required",
             "searchLimitInvalid": "`--limit <n>` must be a positive integer"
         }

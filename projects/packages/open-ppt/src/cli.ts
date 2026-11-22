@@ -75,6 +75,23 @@ const flag = (options: ParsedOptions, key: string): boolean => options[key] === 
 
 const input = (options: ParsedOptions): string | undefined => options._?.[0];
 
+/** Parses one-based slide numbers into zero-based indexes. `null` means malformed. */
+const slideIndexes = (options: ParsedOptions): number[] | undefined | null => {
+    const value = text(options, 'pages');
+    if (value === undefined) {
+        return undefined;
+    }
+    const parts = value.split(',').map((part) => part.trim()).filter((part) => part.length > 0);
+    if (parts.length === 0) {
+        return null;
+    }
+    const numbers = parts.map(Number);
+    if (!numbers.every((number) => Number.isSafeInteger(number) && number >= 1)) {
+        return null;
+    }
+    return [...new Set(numbers.map((number) => number - 1))];
+};
+
 function describeCapabilities(matrix: OpenPPTCapabilities): string {
     const formats = Object.entries(matrix.formats)
         .filter(([, entry]) => entry.import === 'supported')
@@ -400,6 +417,7 @@ cli
     .command('render', 'cli.cmd.render')
     .option('--out <dir>', 'cli.opt.outDir')
     .option('--format <format>', 'cli.opt.renderFormat', { enum: ['svg'] })
+    .option('--pages <list>', 'cli.opt.slidePages')
     .actionCtx(async (options, _args, ctx) => {
         const file = input(options);
         if (file === undefined) {
@@ -411,10 +429,15 @@ cli
             ctx.fail('open-ppt.cli.format-unsupported', { message: `the \`${format}\` renderer is not implemented` });
             return 2;
         }
+        const pages = slideIndexes(options);
+        if (pages === null) {
+            ctx.fail('cli.error.slidePagesInvalid', { message: '`--pages` needs one-based slide numbers such as 1,3' });
+            return 2;
+        }
         const out = text(options, 'out');
         await withSession(async (ppt) => {
             const deck = await ppt.open({ path: file });
-            const report = await deck.render({ format: 'svg', target: out });
+            const report = await deck.render({ format: 'svg', target: out, pages });
             const lines = [`render revision=${report.revision} format=svg pages=${report.pages.length}`];
             for (const page of report.pages) {
                 lines.push(`  [${page.index}] ${page.widthPx}x${page.heightPx}px ${page.path ?? page.slideId}`);
@@ -431,10 +454,16 @@ cli
     .command('contact-sheet', 'cli.cmd.contactSheet')
     .option('--out <file>', 'cli.opt.contactSheetOut')
     .option('--columns <n>', 'cli.opt.contactSheetColumns')
+    .option('--pages <list>', 'cli.opt.slidePages')
     .actionCtx(async (options, _args, ctx) => {
         const file = input(options);
         if (file === undefined) {
             ctx.fail('open-ppt.cli.file-required', { message: 'a project file is required' });
+            return 2;
+        }
+        const pages = slideIndexes(options);
+        if (pages === null) {
+            ctx.fail('cli.error.slidePagesInvalid', { message: '`--pages` needs one-based slide numbers such as 1,3' });
             return 2;
         }
         const out = text(options, 'out');
@@ -452,7 +481,7 @@ cli
         }
         await withSession(async (ppt) => {
             const deck = await ppt.open({ path: file });
-            const sheet = await deck.contactSheet({ target: out, columns });
+            const sheet = await deck.contactSheet({ target: out, columns, pages });
             const lines = [
                 `contact-sheet ${out} slides=${sheet.slideIds.length} columns=${sheet.columns} size=${sheet.widthPx}x${sheet.heightPx}px bytes=${sheet.bytes}`,
             ];

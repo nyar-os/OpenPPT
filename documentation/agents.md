@@ -27,8 +27,8 @@ Binary: `open-ppt` (`projects/packages/open-ppt/dist/cli.js`). Global flags: `--
 | `import <pptx> --out <file>` | Import a PresentationML package as an editable project | `--overwrite` |
 | `inspect <file>` | Run geometry and rule checks | `--checks overflow,contrast,alignment,assets,fonts,out-of-bounds` |
 | `play <file>` | Walk the static show, or play a PPTX package | `--out <dir>` |
-| `render <file> --out <dir>` | Render every slide to standalone SVG | `--format svg` |
-| `contact-sheet <file> --out <svg>` | Render all slides into one SVG sheet | `--columns <n>` (default 3) |
+| `render <file> --out <dir>` | Render every slide to standalone SVG | `--format svg`, `--pages <list>` (one-based slide numbers) |
+| `contact-sheet <file> --out <svg>` | Render slides into one SVG sheet | `--columns <n>` (default 3), `--pages <list>` (one-based slide numbers) |
 | `export <file> --format <fmt> --out <file>` | Write PPTX, PPSX, POTX or PDF | `--overwrite` |
 | `edit <file>` | Compatibility only: apply one atomic JSON edit script. New work should call `Deck.edit()` from a TypeScript script instead | `--ops <json>`, `--script <file>`, `--out <file>`, `--overwrite`, `--expected-revision <n>` |
 | `slide <file> <slideId>` | Print one slide and its elements | — |
@@ -90,7 +90,7 @@ console.log(reopened.summary().revision, reopened.summary().slides.length);
 await reopened.close();
 ```
 
-`contactSheet({ pages })` accepts zero-based slide indexes or `'all'`; the sheet then holds only those slides while `slideIds`, `tiles` and the sheet size follow the filtered set. Omit `pages` for the whole deck.
+`contactSheet({ pages })` accepts zero-based slide indexes or `'all'`; the sheet then holds only those slides while `slideIds`, `tiles` and the sheet size follow the filtered set. Omit `pages` for the whole deck. The CLI spells the same filter `--pages 1,3`, using one-based slide numbers for both `render` and `contact-sheet`.
 
 `body` and the second slide id are real values returned by the engine; never invent ids. Report `export().losses` instead of claiming a lossless conversion.
 
