@@ -655,6 +655,8 @@ export interface ContactSheetOptions {
     readonly columns?: number;
     /** Gap between thumbnails in pixels; defaults to 12. */
     readonly gap?: number;
+    /** Zero-based slide indexes to place, or `'all'`. Defaults to the whole deck. */
+    readonly pages?: 'all' | readonly number[];
 }
 
 /** One thumbnail placed on a contact sheet, in sheet pixels. */

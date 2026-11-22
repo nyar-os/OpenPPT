@@ -434,7 +434,7 @@ export class Deck {
         if (!Number.isFinite(gap) || gap < 0) {
             throw new OpenPPTError('session/argument-invalid', '`gap` must be a non-negative number');
         }
-        const report = await this.render({ format: 'svg' });
+        const report = await this.render({ format: 'svg', pages: options?.pages });
         const layout = buildContactSheetSvg(report.pages, { columns, gap });
         const bytes = Buffer.byteLength(layout.svg);
         const target = options?.target;

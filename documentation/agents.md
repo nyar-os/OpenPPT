@@ -80,6 +80,7 @@ for (const issue of inspection.issues) {
 
 // Preview, export an exchange format, save the native project and reopen it.
 await deck.render({ format: 'svg', target: 'preview' });
+await deck.contactSheet({ target: 'review.svg', pages: [0, 2] });
 await deck.export({ format: 'pptx', target: 'q4.pptx', overwrite: true });
 await deck.save({ target: 'q4.oppt', overwrite: true });
 await deck.close();
@@ -88,6 +89,8 @@ const reopened = await ppt.open({ path: 'q4.oppt' });
 console.log(reopened.summary().revision, reopened.summary().slides.length);
 await reopened.close();
 ```
+
+`contactSheet({ pages })` accepts zero-based slide indexes or `'all'`; the sheet then holds only those slides while `slideIds`, `tiles` and the sheet size follow the filtered set. Omit `pages` for the whole deck.
 
 `body` and the second slide id are real values returned by the engine; never invent ids. Report `export().losses` instead of claiming a lossless conversion.
 

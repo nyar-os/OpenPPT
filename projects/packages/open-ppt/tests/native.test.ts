@@ -245,6 +245,25 @@ test('render and export answer with real pages and a real package', { skip }, as
     await ppt.dispose();
 });
 
+test('contact sheets can be limited to selected slides', { skip }, async () => {
+    const ppt = new OpenPPT();
+    const deck = await ppt.create({ title: 'Sheet', size: { widthPt: 960, heightPt: 540 } });
+    for (const title of ['One', 'Two', 'Three']) {
+        const slide = await deck.slides.add();
+        await slide.title.set(title);
+    }
+
+    const full = await deck.contactSheet();
+    assert.equal(full.slideIds.length, 3);
+    assert.deepEqual(full.tiles.map((tile) => tile.index), [0, 1, 2]);
+
+    const picked = await deck.contactSheet({ pages: [0, 2] });
+    assert.deepEqual(picked.tiles.map((tile) => tile.index), [0, 2]);
+    assert.deepEqual(picked.slideIds, [full.slideIds[0], full.slideIds[2]]);
+    assert.ok(picked.widthPx <= full.widthPx);
+    await ppt.dispose();
+});
+
 test('exported packages import back as editable decks', { skip }, async () => {
     const ppt = new OpenPPT();
     const deck = await ppt.create({ title: 'Import', size: { widthPt: 960, heightPt: 540 } });
