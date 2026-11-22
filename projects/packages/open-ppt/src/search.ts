@@ -14,6 +14,8 @@ export interface TextSourceSlide {
     readonly id: string;
     readonly index: number;
     readonly title?: string;
+    /** Speaker notes; searched only when the caller opts in. */
+    readonly notes?: string | null;
     readonly elements: readonly TextSourceElement[];
 }
 
@@ -48,12 +50,13 @@ function escapeForRegExp(value: string): string {
 /**
  * Collects the visible text of one slide.
  *
- * The slide title comes first, then elements in paint order. Text elements
- * contribute their `text`; tables join their cells with a tab and rows with a
- * newline so a composite block is still matchable. Other kinds and alt text
- * are not visible content and stay out of the index.
+ * The slide title comes first, then elements in paint order, then speaker notes
+ * when `includeNotes` is set. Text elements contribute their `text`; tables join
+ * their cells with a tab and rows with a newline so a composite block is still
+ * matchable. Other kinds and alt text are not visible content and stay out of
+ * the index.
  */
-export function collectTextSegments(slide: TextSourceSlide): TextSegment[] {
+export function collectTextSegments(slide: TextSourceSlide, includeNotes = false): TextSegment[] {
     const segments: TextSegment[] = [];
     if (typeof slide.title === 'string' && slide.title.length > 0) {
         segments.push({ kind: 'title', text: slide.title });
@@ -68,6 +71,9 @@ export function collectTextSegments(slide: TextSourceSlide): TextSegment[] {
             ...(element.id === undefined ? {} : { elementId: element.id }),
             text,
         });
+    }
+    if (includeNotes && typeof slide.notes === 'string' && slide.notes.length > 0) {
+        segments.push({ kind: 'notes', text: slide.notes });
     }
     return segments;
 }
@@ -114,7 +120,8 @@ export function findTextMatches(
  * Searches every slide in order and returns one hit per match.
  *
  * `limit` (default 100) caps the list; the returned array carries
- * `truncated: true` when matches were dropped.
+ * `truncated: true` when matches were dropped. Speaker notes join the search
+ * when `notes` is set.
  */
 export function searchSlides(
     slides: readonly TextSourceSlide[],
@@ -123,11 +130,12 @@ export function searchSlides(
 ): SearchHitList {
     const caseSensitive = options.caseSensitive ?? false;
     const regex = options.regex ?? false;
+    const notes = options.notes ?? false;
     const limit = options.limit ?? 100;
     const hits: SearchHit[] = [];
     let truncated = false;
     for (const slide of slides) {
-        for (const segment of collectTextSegments(slide)) {
+        for (const segment of collectTextSegments(slide, notes)) {
             for (const match of findTextMatches(segment.text, query, caseSensitive, regex)) {
                 if (hits.length >= limit) {
                     truncated = true;

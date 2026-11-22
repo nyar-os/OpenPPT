@@ -240,9 +240,10 @@ export class Deck {
      *
      * Matching is case-insensitive by default. With `regex: true`, `query` is a
      * JavaScript pattern whose matches are reported by offset and length.
-     * `limit` (default 100) caps the returned hits and sets `truncated` on the
-     * result array when matches were dropped. An empty query or an invalid
-     * pattern is `session/argument-invalid`.
+     * `notes: true` also searches speaker notes. `limit` (default 100) caps the
+     * returned hits and sets `truncated` on the result array when matches were
+     * dropped. An empty query or an invalid pattern is
+     * `session/argument-invalid`.
      */
     async search(query: string, options: SearchOptions = {}): Promise<SearchHitList> {
         this.assertOpen('deck.search');
@@ -254,6 +255,9 @@ export class Deck {
         }
         if (options.regex !== undefined && typeof options.regex !== 'boolean') {
             throw new OpenPPTError('session/argument-invalid', '`regex` must be a boolean');
+        }
+        if (options.notes !== undefined && typeof options.notes !== 'boolean') {
+            throw new OpenPPTError('session/argument-invalid', '`notes` must be a boolean');
         }
         const limit = options.limit ?? 100;
         if (!Number.isInteger(limit) || limit < 1) {

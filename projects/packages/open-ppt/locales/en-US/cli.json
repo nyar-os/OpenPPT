@@ -13,7 +13,7 @@
             "export": "Write a project file as an editable PresentationML package or a static PDF",
             "edit": "Apply one atomic JSON edit script to a project file",
             "slide": "Print one slide and its elements from a project file",
-            "search": "Search visible text across every slide of a project file",
+            "search": "Search visible text and optionally speaker notes across every slide of a project file",
             "outline": "Print the slide outline of a project file without rendering",
             "assets": "List the embedded assets of a project file",
             "undo": "Restore the previous committed revision of a project file",
@@ -42,6 +42,7 @@
             "contactSheetColumns": "Thumbnail columns (positive integer, default 3)",
             "caseSensitive": "Match text with exact letter case",
             "regex": "Treat the query as a regular expression instead of literal text",
+            "notes": "Also search speaker notes, not just visible slide text",
             "limit": "Maximum number of matches to report (positive integer, default 100)"
         },
         "error": {

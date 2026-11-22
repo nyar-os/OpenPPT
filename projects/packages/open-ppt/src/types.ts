@@ -682,8 +682,8 @@ export interface ContactSheet {
     readonly path?: string;
 }
 
-/** What kind of text a search hit came from: a slide title or an element kind. */
-export type SearchHitKind = ElementKind | 'title';
+/** What kind of text a search hit came from: a slide title, notes or an element kind. */
+export type SearchHitKind = ElementKind | 'title' | 'notes';
 
 /** Options of `deck.search()`. */
 export interface SearchOptions {
@@ -691,6 +691,8 @@ export interface SearchOptions {
     readonly caseSensitive?: boolean;
     /** Treat `query` as a regular expression instead of literal text; defaults to `false`. */
     readonly regex?: boolean;
+    /** Also search speaker notes; defaults to `false`, which searches visible text only. */
+    readonly notes?: boolean;
     /** Maximum hits to return; defaults to 100. */
     readonly limit?: number;
 }
@@ -699,8 +701,9 @@ export interface SearchOptions {
  * One match of a search query.
  *
  * `text` is the complete text unit the match was found in (a slide title, a
- * text element or a table joined with tabs and newlines), and `start`/`length`
- * locate the match inside it. Title hits carry no `elementId`.
+ * text element, a table joined with tabs and newlines, or speaker notes when
+ * `notes` was set), and `start`/`length` locate the match inside it. Title and
+ * notes hits carry no `elementId`.
  */
 export interface SearchHit {
     readonly slideId: SlideId;

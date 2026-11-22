@@ -268,6 +268,24 @@ test('deck search walks slides in order and truncates at the limit', () => {
     assert.equal(searchSlides(slides, 'absent').length, 0);
 });
 
+test('deck search can include speaker notes', () => {
+    const slides = [
+        { id: 'slide-1', index: 0, title: 'Intro', notes: 'Mention revenue twice', elements: [] },
+        { id: 'slide-2', index: 1, title: 'Plan', notes: null, elements: [{ id: 'text-1', kind: 'text', text: 'revenue' }] },
+    ];
+
+    assert.equal(searchSlides(slides, 'revenue').length, 1, 'notes stay out by default');
+    const hits = searchSlides(slides, 'revenue', { notes: true });
+    assert.deepEqual(
+        hits.map((hit) => [hit.slideId, hit.kind, hit.elementId ?? null]),
+        [
+            ['slide-1', 'notes', null],
+            ['slide-2', 'text', 'text-1'],
+        ],
+    );
+    assert.equal(hits[0]?.text, 'Mention revenue twice');
+});
+
 test('outline maps the committed summary without rendering', () => {
     const outline = buildOutline({
         revision: 3,

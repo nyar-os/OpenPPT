@@ -575,6 +575,7 @@ cli
     .command('search', 'cli.cmd.search')
     .option('--case-sensitive', 'cli.opt.caseSensitive')
     .option('--regex', 'cli.opt.regex')
+    .option('--notes', 'cli.opt.notes')
     .option('--limit <n>', 'cli.opt.limit')
     .actionCtx(async (options, _args, ctx) => {
         const file = input(options);
@@ -600,6 +601,7 @@ cli
             const hits = await deck.search(query, {
                 caseSensitive: flag(options, 'case-sensitive'),
                 regex: flag(options, 'regex'),
+                notes: flag(options, 'notes'),
                 ...(limit === undefined ? {} : { limit }),
             });
             ctx.emitResult(
