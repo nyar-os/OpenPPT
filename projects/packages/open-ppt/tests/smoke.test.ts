@@ -257,6 +257,8 @@ test('deck search walks slides in order and truncates at the limit', () => {
     );
     assert.equal(hits[2]?.start, 0);
     assert.equal(hits[2]?.text, 'Revenue\t42');
+    assert.equal(hits[0]?.context, 'Revenue overview');
+    assert.equal(hits[2]?.context, 'Revenue\t42');
 
     const limited = searchSlides(slides, 'revenue', { limit: 2 });
     assert.equal(limited.length, 2);
@@ -266,6 +268,18 @@ test('deck search walks slides in order and truncates at the limit', () => {
     assert.equal(caseSensitive.length, 3);
     assert.equal(caseSensitive.some((hit) => hit.slideId === 'slide-2'), false);
     assert.equal(searchSlides(slides, 'absent').length, 0);
+});
+
+test('search hits carry a bounded excerpt around the match', () => {
+    const long = `${'a'.repeat(60)}needle${'b'.repeat(60)}`;
+    const [hit] = searchSlides([{ id: 'slide-1', index: 0, title: long, elements: [] }], 'needle');
+    assert.ok(hit);
+    assert.equal(hit.context, `…${'a'.repeat(40)}needle${'b'.repeat(40)}…`);
+
+    const emoji = `${'😀'.repeat(30)}x${'😀'.repeat(30)}`;
+    const [emojiHit] = searchSlides([{ id: 'slide-2', index: 0, title: emoji, elements: [] }], 'x');
+    assert.ok(emojiHit);
+    assert.equal(emojiHit.context, `…${'😀'.repeat(20)}x${'😀'.repeat(20)}…`, 'the window never splits a surrogate pair');
 });
 
 test('deck search can include speaker notes', () => {

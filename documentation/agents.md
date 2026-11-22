@@ -36,6 +36,8 @@ Binary: `open-ppt` (`projects/packages/open-ppt/dist/cli.js`). Global flags: `--
 
 Project files are native deck files (for example `review.oppt`). Export formats currently are `pptx`, `ppsx`, `potx` and `pdf`.
 
+Every `search` hit carries `text` (the whole title, element, table or notes unit), `start` and `length` (UTF-16 offsets inside `text`), and `context`: an excerpt with up to 40 characters on each side of the match, with `…` marking a clipped edge. `context` never splits a surrogate pair, so it is safe to print without re-slicing the full `text`.
+
 ## Edit script shape
 
 `edit` accepts either a bare operations array or a full request:

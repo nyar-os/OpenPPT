@@ -703,7 +703,8 @@ export interface SearchOptions {
  * `text` is the complete text unit the match was found in (a slide title, a
  * text element, a table joined with tabs and newlines, or speaker notes when
  * `notes` was set), and `start`/`length` locate the match inside it. Title and
- * notes hits carry no `elementId`.
+ * notes hits carry no `elementId`. `context` is a shorter excerpt around the
+ * match, with `…` marking text that was cut off on either side.
  */
 export interface SearchHit {
     readonly slideId: SlideId;
@@ -713,6 +714,8 @@ export interface SearchHit {
     readonly text: string;
     readonly start: number;
     readonly length: number;
+    /** Up to 40 characters before and after the match, with `…` for clipped edges. */
+    readonly context: string;
 }
 
 /**

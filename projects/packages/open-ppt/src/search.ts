@@ -116,6 +116,32 @@ export function findTextMatches(
     return matches;
 }
 
+/** Characters of surrounding text kept on each side of a search hit. */
+const CONTEXT_RADIUS = 40;
+
+/**
+ * Builds a short excerpt around one match.
+ *
+ * At most {@link CONTEXT_RADIUS} UTF-16 units are kept on either side, `…`
+ * marks a clipped edge, and the window never splits a surrogate pair.
+ */
+export function contextAround(text: string, start: number, length: number): string {
+    const end = start + length;
+    let from = Math.max(0, start - CONTEXT_RADIUS);
+    let to = Math.min(text.length, end + CONTEXT_RADIUS);
+    if (from > 0 && isLowSurrogate(text.charCodeAt(from))) {
+        from -= 1;
+    }
+    if (to < text.length && isLowSurrogate(text.charCodeAt(to))) {
+        to += 1;
+    }
+    return `${from > 0 ? '…' : ''}${text.slice(from, to)}${to < text.length ? '…' : ''}`;
+}
+
+function isLowSurrogate(code: number): boolean {
+    return code >= 0xdc00 && code <= 0xdfff;
+}
+
 /**
  * Searches every slide in order and returns one hit per match.
  *
@@ -149,6 +175,7 @@ export function searchSlides(
                     text: segment.text,
                     start: match.start,
                     length: match.length,
+                    context: contextAround(segment.text, match.start, match.length),
                 });
             }
             if (truncated) {
