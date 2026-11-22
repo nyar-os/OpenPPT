@@ -43,6 +43,7 @@
             "caseSensitive": "Match text with exact letter case",
             "regex": "Treat the query as a regular expression instead of literal text",
             "notes": "Also search speaker notes, not just visible slide text",
+            "slideFilter": "Search only these slide ids (repeatable, comma-separated lists accepted)",
             "limit": "Maximum number of matches to report (positive integer, default 100)"
         },
         "error": {

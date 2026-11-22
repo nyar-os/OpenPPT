@@ -147,7 +147,8 @@ function isLowSurrogate(code: number): boolean {
  *
  * `limit` (default 100) caps the list; the returned array carries
  * `truncated: true` when matches were dropped. Speaker notes join the search
- * when `notes` is set.
+ * when `notes` is set. `slideIds` restricts the search to those slides;
+ * unknown ids simply match nothing.
  */
 export function searchSlides(
     slides: readonly TextSourceSlide[],
@@ -158,9 +159,13 @@ export function searchSlides(
     const regex = options.regex ?? false;
     const notes = options.notes ?? false;
     const limit = options.limit ?? 100;
+    const only = options.slideIds === undefined ? undefined : new Set(options.slideIds);
     const hits: SearchHit[] = [];
     let truncated = false;
     for (const slide of slides) {
+        if (only !== undefined && !only.has(slide.id)) {
+            continue;
+        }
         for (const segment of collectTextSegments(slide, notes)) {
             for (const match of findTextMatches(segment.text, query, caseSensitive, regex)) {
                 if (hits.length >= limit) {

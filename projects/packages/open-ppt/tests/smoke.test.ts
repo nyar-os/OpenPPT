@@ -270,6 +270,25 @@ test('deck search walks slides in order and truncates at the limit', () => {
     assert.equal(searchSlides(slides, 'absent').length, 0);
 });
 
+test('search can be restricted to listed slides', () => {
+    const slides = [
+        { id: 'slide-1', index: 0, title: 'Revenue overview', elements: [] },
+        { id: 'slide-2', index: 1, title: 'Plan', elements: [{ id: 'text-1', kind: 'text', text: 'revenue target' }] },
+    ];
+
+    const only = searchSlides(slides, 'revenue', { slideIds: ['slide-2'] });
+    assert.deepEqual(
+        only.map((hit) => [hit.slideId, hit.kind]),
+        [['slide-2', 'text']],
+    );
+
+    const unknown = searchSlides(slides, 'revenue', { slideIds: ['slide-9'] });
+    assert.equal(unknown.length, 0);
+    assert.equal(unknown.truncated, false);
+
+    assert.equal(searchSlides(slides, 'revenue', { slideIds: [] }).length, 0);
+});
+
 test('search hits carry a bounded excerpt around the match', () => {
     const long = `${'a'.repeat(60)}needle${'b'.repeat(60)}`;
     const [hit] = searchSlides([{ id: 'slide-1', index: 0, title: long, elements: [] }], 'needle');

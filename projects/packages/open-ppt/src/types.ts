@@ -695,6 +695,8 @@ export interface SearchOptions {
     readonly notes?: boolean;
     /** Maximum hits to return; defaults to 100. */
     readonly limit?: number;
+    /** Search only these slide ids, in deck order; unknown ids are ignored. */
+    readonly slideIds?: readonly SlideId[];
 }
 
 /**

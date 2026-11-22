@@ -240,9 +240,10 @@ export class Deck {
      *
      * Matching is case-insensitive by default. With `regex: true`, `query` is a
      * JavaScript pattern whose matches are reported by offset and length.
-     * `notes: true` also searches speaker notes. `limit` (default 100) caps the
-     * returned hits and sets `truncated` on the result array when matches were
-     * dropped. An empty query or an invalid pattern is
+     * `notes: true` also searches speaker notes. `slideIds` restricts the
+     * search to those slides, and unknown ids are ignored. `limit` (default
+     * 100) caps the returned hits and sets `truncated` on the result array
+     * when matches were dropped. An empty query or an invalid pattern is
      * `session/argument-invalid`.
      */
     async search(query: string, options: SearchOptions = {}): Promise<SearchHitList> {
@@ -258,6 +259,13 @@ export class Deck {
         }
         if (options.notes !== undefined && typeof options.notes !== 'boolean') {
             throw new OpenPPTError('session/argument-invalid', '`notes` must be a boolean');
+        }
+        if (
+            options.slideIds !== undefined
+            && (!Array.isArray(options.slideIds)
+                || options.slideIds.some((id) => typeof id !== 'string' || id.trim().length === 0))
+        ) {
+            throw new OpenPPTError('session/argument-invalid', '`slideIds` must be an array of slide ids');
         }
         const limit = options.limit ?? 100;
         if (!Number.isInteger(limit) || limit < 1) {

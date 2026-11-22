@@ -576,6 +576,7 @@ cli
     .option('--case-sensitive', 'cli.opt.caseSensitive')
     .option('--regex', 'cli.opt.regex')
     .option('--notes', 'cli.opt.notes')
+    .option('--slide <id>...', 'cli.opt.slideFilter')
     .option('--limit <n>', 'cli.opt.limit')
     .actionCtx(async (options, _args, ctx) => {
         const file = input(options);
@@ -598,10 +599,15 @@ cli
         }
         await withSession(async (ppt) => {
             const deck = await ppt.open({ path: file });
+            const slideIds = list(options, 'slide')
+                .flatMap((entry) => entry.split(','))
+                .map((entry) => entry.trim())
+                .filter((entry) => entry.length > 0);
             const hits = await deck.search(query, {
                 caseSensitive: flag(options, 'case-sensitive'),
                 regex: flag(options, 'regex'),
                 notes: flag(options, 'notes'),
+                ...(slideIds.length === 0 ? {} : { slideIds }),
                 ...(limit === undefined ? {} : { limit }),
             });
             ctx.emitResult(
