@@ -1136,6 +1136,33 @@ fn deck_title_sets_trims_and_clears() {
 }
 
 #[test]
+fn slide_add_can_seed_a_title_and_notes() {
+    let (mut deck, _slide) = background_deck();
+    let revision = deck.revision();
+
+    let report = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "slide.add", "title": "  Agenda  ", "notes": "  Talk track  " }] }),
+    )
+    .expect("add a titled slide");
+    assert_eq!(report["revision"], revision + 1);
+    let slides = summary(&deck)["slides"].as_array().expect("slides").clone();
+    let added = slides.last().expect("the new slide");
+    assert_eq!(added["title"], json!("Agenda"), "the title is trimmed");
+    assert_eq!(added["notes"], json!("Talk track"), "the notes are trimmed");
+
+    for operation in [
+        json!({ "op": "slide.add", "title": "   " }),
+        json!({ "op": "slide.add", "notes": "" }),
+        json!({ "op": "slide.add", "title": 5 }),
+    ] {
+        let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("bad slide seed");
+        assert_eq!(error.code, "session/argument-invalid");
+    }
+    assert_eq!(deck.revision(), revision + 1, "failed slides consume no revision");
+}
+
+#[test]
 fn deck_size_accepts_named_ratios_and_custom_points() {
     let (mut deck, _slide) = background_deck();
     let revision = deck.revision();

@@ -1144,7 +1144,21 @@ fn queued_widths(deferred: &[Deferred], slide: &SlideId, element: &ElementId) ->
         let layout = layout
             .map(|value| LayoutId::new(value).ok_or_else(|| invalid("slide layout identity must not be empty")))
             .transpose()?;
+        let title = optional_string(operation, "title")?;
+        if title.as_deref().is_some_and(|value| value.trim().is_empty()) {
+            return Err(invalid("`title` must not be blank"));
+        }
+        let notes = optional_string(operation, "notes")?;
+        if notes.as_deref().is_some_and(|value| value.trim().is_empty()) {
+            return Err(invalid("`notes` must not be blank"));
+        }
         let slide = draft.add_slide(SlideAddOptions { layout, index: optional_usize(operation, "index")? })?;
+        if let Some(title) = title {
+            draft.set_slide_title(&slide, title.trim())?;
+        }
+        if let Some(notes) = notes {
+            draft.set_slide_notes(&slide, Some(notes.trim().to_owned()))?;
+        }
         Ok(slide.as_str().to_string())
     }
 
