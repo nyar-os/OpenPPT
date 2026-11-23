@@ -59,7 +59,7 @@ open-ppt export launch.project --format pdf --out launch.pdf --overwrite
 ## ✨ Highlights
 
 - **One editable deck model.** Playback, editing and agent authoring read and write the same project, with stable IDs and a monotonic revision on every object.
-- **Programmatic authoring.** Slides, text, images, shapes, tables, charts, formulas, media, assets, titles, notes, hidden slides and slide backgrounds.
+- **Programmatic authoring.** Slides, text, images, shapes, tables, charts, formulas, media, assets, titles, notes, hidden slides, slide backgrounds and deck-wide find and replace.
 - **Real layout operations.** Align to the slide or to the selection, distribute three or more boxes, change Z-order, lock elements, transform them, or duplicate an element onto another slide.
 - **Atomic edits.** Every edit script is one transaction. Pin `expectedRevision`, and a failed edit writes no output file and leaves no half-changed deck.
 - **Undo and redo.** Any committed edit can be reverted and reapplied.

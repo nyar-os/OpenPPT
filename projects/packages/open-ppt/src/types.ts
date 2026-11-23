@@ -728,6 +728,23 @@ export interface SearchOptions {
 }
 
 /**
+ * Options of `deck.replaceText()`.
+ *
+ * The matching options mirror {@link SearchOptions}; regular expressions,
+ * `notes` and hit caps have no meaning for a rewrite and are not accepted.
+ */
+export interface ReplaceTextOptions {
+    /** Match exact letter case; defaults to `false`. */
+    readonly caseSensitive?: boolean;
+    /** Only replace matches delimited by non-word characters; defaults to `false`. */
+    readonly wholeWord?: boolean;
+    /** Replace only on these slide ids, in deck order; unknown ids are ignored. */
+    readonly slideIds?: readonly SlideId[];
+    /** Reject the edit when the committed revision moved; same as `edit()`. */
+    readonly expectedRevision?: number;
+}
+
+/**
  * One match of a search query.
  *
  * `text` is the complete text unit the match was found in (a slide title, a

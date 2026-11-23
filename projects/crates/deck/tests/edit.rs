@@ -1035,11 +1035,9 @@ fn element_text_style_reaches_every_run() {
     assert_eq!(style["color"], json!("#00AA00"));
     assert_eq!(style["fontFamily"], json!("Inter"));
 
-    let error = edit(
-        &mut deck,
-        &json!({ "operations": [{ "op": "element.setTextStyle", "slideId": slide, "elementId": element }] }),
-    )
-    .expect_err("an empty style is refused");
+    let error =
+        edit(&mut deck, &json!({ "operations": [{ "op": "element.setTextStyle", "slideId": slide, "elementId": element }] }))
+            .expect_err("an empty style is refused");
     assert_eq!(error.code, "session/argument-invalid");
 
     for operation in [
@@ -1083,4 +1081,139 @@ fn a_failing_duplicate_rolls_back_the_whole_batch() {
     assert_eq!(error.code, "object/not-found");
     assert_eq!(deck.revision(), revision, "no revision is consumed");
     assert_eq!(element_ids(&deck, &slide), sources, "the first duplicate is rolled back");
+}
+
+fn replace_deck() -> (Deck, String, String) {
+    let mut deck = Deck::create(DeckCreateOptions::default());
+    let report = edit(
+        &mut deck,
+        &json!({
+            "operations": [
+                { "op": "slide.add", "as": "$tx:first" },
+                { "op": "text.add", "slideId": "$tx:first", "text": "Revenue for Q4 beats plan; revenues rose" },
+                { "op": "slide.add", "as": "$tx:second" },
+                {
+                    "op": "text.add",
+                    "slideId": "$tx:second",
+                    "text": { "paragraphs": [{ "runs": [{ "text": "revenue" }, { "text": " is up" }], "level": 0 }] },
+                },
+                {
+                    "op": "table.add",
+                    "slideId": "$tx:second",
+                    "columnWidthsPt": [100.0, 100.0],
+                    "rowHeightsPt": [30.0, 30.0],
+                    "rows": [
+                        [{ "text": "Revenue" }, { "text": "Q4 revenue plan" }],
+                        [{ "text": "Cost" }, { "text": "flat" }],
+                    ],
+                },
+            ],
+        }),
+    )
+    .expect("replace deck builds");
+    let first = report["resolved"]["$tx:first"].as_str().expect("first slide id").to_string();
+    let second = report["resolved"]["$tx:second"].as_str().expect("second slide id").to_string();
+    (deck, first, second)
+}
+
+#[test]
+fn deck_replace_text_rewrites_text_elements_and_table_cells() {
+    let (mut deck, first, second) = replace_deck();
+    let revision = deck.revision();
+    let report =
+        edit(&mut deck, &json!({ "operations": [{ "op": "deck.replaceText", "find": "revenue", "replace": "income" }] }))
+            .expect("replacement applies");
+    assert_eq!(report["results"][0], "5", "every run-level match is replaced");
+    assert_eq!(report["revision"], revision + 1, "one script bumps one revision");
+
+    let detail = slide_detail(&deck, &first).expect("slide exists");
+    assert_eq!(detail["elements"][0]["text"], "income for Q4 beats plan; incomes rose");
+
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    assert_eq!(detail["elements"][0]["text"], "income is up");
+    assert_eq!(detail["elements"][1]["content"]["rows"][0]["cells"][0]["text"], "income");
+    assert_eq!(detail["elements"][1]["content"]["rows"][0]["cells"][1]["text"], "Q4 income plan");
+    assert_eq!(detail["elements"][1]["content"]["rows"][1]["cells"][0]["text"], "Cost");
+}
+
+#[test]
+fn deck_replace_text_honours_case_and_whole_word_options() {
+    let (mut deck, first, second) = replace_deck();
+    let report = edit(
+        &mut deck,
+        &json!({
+            "operations": [{ "op": "deck.replaceText", "find": "revenue", "replace": "income", "caseSensitive": true, "wholeWord": true }],
+        }),
+    )
+    .expect("case-sensitive whole-word replacement applies");
+    assert_eq!(report["results"][0], "2", "only exact-case whole words are replaced");
+    let detail = slide_detail(&deck, &first).expect("slide exists");
+    assert_eq!(detail["elements"][0]["text"], "Revenue for Q4 beats plan; revenues rose");
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    assert_eq!(detail["elements"][0]["text"], "income is up");
+    assert_eq!(detail["elements"][1]["content"]["rows"][0]["cells"][0]["text"], "Revenue");
+    assert_eq!(detail["elements"][1]["content"]["rows"][0]["cells"][1]["text"], "Q4 income plan");
+
+    let (mut deck, first, second) = replace_deck();
+    let report = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "deck.replaceText", "find": "revenue", "replace": "income", "wholeWord": true }] }),
+    )
+    .expect("whole-word replacement applies");
+    assert_eq!(report["results"][0], "4", "the plural form is left alone");
+    let detail = slide_detail(&deck, &first).expect("slide exists");
+    assert_eq!(detail["elements"][0]["text"], "income for Q4 beats plan; revenues rose");
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    assert_eq!(detail["elements"][0]["text"], "income is up");
+}
+
+#[test]
+fn deck_replace_text_restricts_rewrites_to_listed_slides() {
+    let (mut deck, first, second) = replace_deck();
+    let report = edit(
+        &mut deck,
+        &json!({
+            "operations": [{ "op": "deck.replaceText", "find": "revenue", "replace": "income", "slideIds": ["slide-missing", second] }],
+        }),
+    )
+    .expect("filtered replacement applies");
+    assert_eq!(report["results"][0], "3", "only the listed slide is rewritten and unknown ids are ignored");
+    let detail = slide_detail(&deck, &first).expect("slide exists");
+    assert_eq!(detail["elements"][0]["text"], "Revenue for Q4 beats plan; revenues rose");
+}
+
+#[test]
+fn deck_replace_text_leaves_matches_spanning_runs_untouched() {
+    let (mut deck, _first, second) = replace_deck();
+    let report =
+        edit(&mut deck, &json!({ "operations": [{ "op": "deck.replaceText", "find": "revenue is", "replace": "income" }] }))
+            .expect("cross-run replacement applies");
+    assert_eq!(report["results"][0], "0", "a match spanning two runs is not replaced");
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    assert_eq!(detail["elements"][0]["text"], "revenue is up");
+}
+
+#[test]
+fn deck_replace_text_rejects_bad_arguments() {
+    let (mut deck, _first, _second) = replace_deck();
+    let revision = deck.revision();
+
+    let error = edit(&mut deck, &json!({ "operations": [{ "op": "deck.replaceText", "find": "", "replace": "income" }] }))
+        .expect_err("an empty needle is refused");
+    assert_eq!(error.code, "session/argument-invalid");
+
+    let error = edit(&mut deck, &json!({ "operations": [{ "op": "deck.replaceText", "find": "revenue" }] }))
+        .expect_err("a missing replacement is refused");
+    assert_eq!(error.code, "session/argument-invalid");
+
+    let error = edit(
+        &mut deck,
+        &json!({
+            "operations": [{ "op": "deck.replaceText", "find": "revenue", "replace": "income", "wholeWord": "yes" }],
+        }),
+    )
+    .expect_err("a non-boolean option is refused");
+    assert_eq!(error.code, "session/argument-invalid");
+
+    assert_eq!(deck.revision(), revision, "failed replacements consume no revision");
 }

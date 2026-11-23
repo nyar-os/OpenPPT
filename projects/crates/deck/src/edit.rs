@@ -50,6 +50,7 @@ enum Deferred {
     Reorder { slide: SlideId, element: ElementId, index: usize },
     MoveSlide { slide: SlideId, index: usize },
     Background { slide: SlideId, fill: Option<Fill> },
+    TableRows { slide: SlideId, element: ElementId, rows: Vec<TableRow> },
 }
 
 /// Applies deferred edits to the committed document and rebuilds the deck.
@@ -86,6 +87,19 @@ fn apply_deferred(deck: &mut Deck, deferred: Vec<Deferred>) -> Result<(), Servic
             Deferred::Background { slide, fill } => {
                 if let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide) {
                     model.background = fill;
+                }
+            }
+            Deferred::TableRows { slide, element, rows } => {
+                let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide)
+                else {
+                    continue;
+                };
+                let Some(target) = model.elements.iter_mut().find(|candidate| candidate.id == element)
+                else {
+                    continue;
+                };
+                if let ElementContent::Table(table) = &mut target.content {
+                    table.rows = rows;
                 }
             }
         }
@@ -261,6 +275,7 @@ impl EditState {
     fn apply(&mut self, draft: &mut DeckEdit, operation: &Value) -> Result<(), DeckError> {
         let name = operation.get("op").and_then(Value::as_str).ok_or_else(|| invalid("every operation needs an `op` name"))?;
         let created = match name {
+            "deck.replaceText" => Some(self.replace_text(draft, operation)?),
             "slide.add" => Some(self.add_slide(draft, operation)?),
             "slide.remove" => {
                 draft.remove_slide(&self.slide(operation)?)?;
@@ -535,6 +550,71 @@ impl EditState {
         Ok(slide.as_str().to_string())
     }
 
+    /// Replaces every match of `find` in the deck's text elements and table cells.
+    ///
+    /// Text elements are rewritten through `set_element_text` inside the
+    /// transaction; table cells have no upstream setter, so their rebuilt rows
+    /// join the deferred list. Matching mirrors `deck.search`: case-insensitive
+    /// by default, with an optional whole-word boundary. Replacement happens per
+    /// run, so a match spanning two runs stays untouched. `slideIds` restricts
+    /// the rewrite to those slides and unknown ids are ignored, exactly like the
+    /// search filter. The result is the number of replaced matches.
+    fn replace_text(&mut self, draft: &mut DeckEdit, operation: &Value) -> Result<String, DeckError> {
+        let find = required_str(operation, "find")?;
+        if find.is_empty() {
+            return Err(invalid("`find` must be a non-empty string"));
+        }
+        let replace = required_str(operation, "replace")?;
+        let case_sensitive = optional_bool(operation, "caseSensitive")?.unwrap_or(false);
+        let whole_word = optional_bool(operation, "wholeWord")?.unwrap_or(false);
+        let only = match operation.get("slideIds") {
+            None | Some(Value::Null) => None,
+            Some(value) => {
+                let values = value.as_array().ok_or_else(|| invalid("`slideIds` must be an array"))?;
+                let mut ids = BTreeSet::new();
+                for item in values {
+                    let raw = item.as_str().ok_or_else(|| invalid("`slideIds` must list slide ids"))?;
+                    ids.insert(self.resolve_value(raw)?);
+                }
+                Some(ids)
+            }
+        };
+        let mut replacements = 0_usize;
+        let mut texts = Vec::new();
+        let mut tables = Vec::new();
+        for model in draft.document().slides.iter() {
+            if only.as_ref().is_some_and(|ids| !ids.contains(model.id.as_str())) {
+                continue;
+            }
+            for element in model.elements.iter() {
+                match &element.content {
+                    ElementContent::Text(text) => {
+                        let (next, hits) = replace_in_text(text, find, replace, case_sensitive, whole_word);
+                        if hits > 0 {
+                            replacements += hits;
+                            texts.push((model.id.clone(), element.id.clone(), next));
+                        }
+                    }
+                    ElementContent::Table(table) => {
+                        let (rows, hits) = replace_in_rows(&table.rows, find, replace, case_sensitive, whole_word);
+                        if hits > 0 {
+                            replacements += hits;
+                            tables.push((model.id.clone(), element.id.clone(), rows));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for (slide, element, text) in texts {
+            draft.set_element_text(&slide, &element, text)?;
+        }
+        for (slide, element, rows) in tables {
+            self.deferred.push(Deferred::TableRows { slide, element, rows });
+        }
+        Ok(replacements.to_string())
+    }
+
     fn add_asset(&mut self, draft: &mut DeckEdit, operation: &Value) -> Result<String, DeckError> {
         let name = required_str(operation, "name")?.to_string();
         let media_type = required_str(operation, "mediaType")?.to_string();
@@ -581,18 +661,25 @@ impl EditState {
                 }
                 draft.add_text(
                     &target,
-                    TextElementInput { text: text.clone(), transform: Some(transform), alt: source.alt.clone(), placeholder: None },
+                    TextElementInput {
+                        text: text.clone(),
+                        transform: Some(transform),
+                        alt: source.alt.clone(),
+                        placeholder: None,
+                    },
                 )?
             }
             ElementContent::Image(image) => {
                 if image.crop.is_some() {
                     return Err(unsupported_element(&slide, &element, "cropped images cannot be rebuilt through `image.add`"));
                 }
-                let alt = source
-                    .alt
-                    .clone()
-                    .filter(|alt| !alt.trim().is_empty())
-                    .ok_or_else(|| unsupported_element(&slide, &element, "images without alternative text cannot be rebuilt through `image.add`"))?;
+                let alt = source.alt.clone().filter(|alt| !alt.trim().is_empty()).ok_or_else(|| {
+                    unsupported_element(
+                        &slide,
+                        &element,
+                        "images without alternative text cannot be rebuilt through `image.add`",
+                    )
+                })?;
                 draft.add_image(&target, ImageElementInput { asset: image.asset.clone(), transform: Some(transform), alt })?
             }
             ElementContent::Shape(shape) => draft.add_shape(
@@ -615,13 +702,25 @@ impl EditState {
                 },
             )?,
             ElementContent::Chart(_) => {
-                return Err(unsupported_element(&slide, &element, "charts cannot be rebuilt through the public authoring inputs"))
+                return Err(unsupported_element(
+                    &slide,
+                    &element,
+                    "charts cannot be rebuilt through the public authoring inputs",
+                ));
             }
             ElementContent::Formula(_) => {
-                return Err(unsupported_element(&slide, &element, "formulas cannot be rebuilt through the public authoring inputs"))
+                return Err(unsupported_element(
+                    &slide,
+                    &element,
+                    "formulas cannot be rebuilt through the public authoring inputs",
+                ));
             }
             ElementContent::Media(_) => {
-                return Err(unsupported_element(&slide, &element, "media cannot be rebuilt through the public authoring inputs"))
+                return Err(unsupported_element(
+                    &slide,
+                    &element,
+                    "media cannot be rebuilt through the public authoring inputs",
+                ));
             }
         };
         Ok(created.as_str().to_string())
@@ -729,7 +828,8 @@ fn required_usize(operation: &Value, key: &str) -> Result<usize, DeckError> {
 
 /// Reads an optional point offset, keeping its sign and accepting zero.
 fn offset_emu(operation: &Value, key: &str) -> Result<i64, DeckError> {
-    let Some(value) = operation.get(key) else {
+    let Some(value) = operation.get(key)
+    else {
         return Ok(0);
     };
     if value.is_null() {
@@ -788,6 +888,99 @@ fn text_content(value: Option<&Value>) -> Result<TextContent, DeckError> {
     }
 }
 
+/// Rebuilds rich text with every match of `find` replaced inside its runs.
+fn replace_in_text(
+    text: &TextContent,
+    find: &str,
+    replace: &str,
+    case_sensitive: bool,
+    whole_word: bool,
+) -> (TextContent, usize) {
+    let mut text = text.clone();
+    let mut hits = 0_usize;
+    for paragraph in &mut text.paragraphs {
+        for run in &mut paragraph.runs {
+            let (next, count) = replace_matches(&run.text, find, replace, case_sensitive, whole_word);
+            if count > 0 {
+                run.text = next;
+                hits += count;
+            }
+        }
+    }
+    (text, hits)
+}
+
+/// Rebuilds table rows with every match of `find` replaced inside the cell texts.
+fn replace_in_rows(
+    rows: &[TableRow],
+    find: &str,
+    replace: &str,
+    case_sensitive: bool,
+    whole_word: bool,
+) -> (Vec<TableRow>, usize) {
+    let mut rows = rows.to_vec();
+    let mut hits = 0_usize;
+    for row in &mut rows {
+        for cell in &mut row.cells {
+            let (next, count) = replace_in_text(&cell.text, find, replace, case_sensitive, whole_word);
+            if count > 0 {
+                cell.text = next;
+                hits += count;
+            }
+        }
+    }
+    (rows, hits)
+}
+
+/// Replaces non-overlapping matches of `find` in one run of text.
+///
+/// Matching mirrors the search options: case folding compares characters, and
+/// `whole_word` refuses matches that touch a letter, digit or underscore.
+fn replace_matches(text: &str, find: &str, replace: &str, case_sensitive: bool, whole_word: bool) -> (String, usize) {
+    let needle = find.chars().collect::<Vec<_>>();
+    if text.is_empty() || needle.is_empty() {
+        return (text.to_string(), 0);
+    }
+    let haystack = text.chars().collect::<Vec<_>>();
+    let mut output = String::with_capacity(text.len());
+    let mut cursor = 0_usize;
+    let mut hits = 0_usize;
+    while cursor < haystack.len() {
+        let matched = matches_at(&haystack, cursor, &needle, case_sensitive)
+            && !(whole_word && touches_word_char(&haystack, cursor, needle.len()));
+        if matched {
+            output.push_str(replace);
+            cursor += needle.len();
+            hits += 1;
+        }
+        else {
+            output.push(haystack[cursor]);
+            cursor += 1;
+        }
+    }
+    (output, hits)
+}
+
+/// Whether `needle` starts at `start` in `haystack` under the case option.
+fn matches_at(haystack: &[char], start: usize, needle: &[char], case_sensitive: bool) -> bool {
+    haystack.len() >= start + needle.len()
+        && haystack[start..]
+            .iter()
+            .zip(needle)
+            .all(|(found, wanted)| found == wanted || (!case_sensitive && found.to_lowercase().eq(wanted.to_lowercase())))
+}
+
+/// Whether the characters around a match are letters, digits or underscores.
+fn touches_word_char(text: &[char], start: usize, length: usize) -> bool {
+    let before = if start == 0 { None } else { Some(text[start - 1]) };
+    let after = text.get(start + length).copied();
+    is_word_char(before) || is_word_char(after)
+}
+
+fn is_word_char(value: Option<char>) -> bool {
+    value.is_some_and(|character| character.is_alphanumeric() || character == '_')
+}
+
 /// Run-level styling applied by `element.setTextStyle`.
 ///
 /// Every set field is written onto every run of the element; omitted or `null`
@@ -828,12 +1021,7 @@ impl TextStyle {
 }
 
 /// Clones the element's rich text and stamps the requested style onto every run.
-fn styled_content(
-    draft: &DeckEdit,
-    slide: &SlideId,
-    element: &ElementId,
-    style: &TextStyle,
-) -> Result<TextContent, DeckError> {
+fn styled_content(draft: &DeckEdit, slide: &SlideId, element: &ElementId, style: &TextStyle) -> Result<TextContent, DeckError> {
     let model = draft.document().slide(slide).ok_or_else(|| missing_slide(slide))?;
     let target = model.element(element).ok_or_else(|| {
         DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{}` does not exist on this slide", element.as_str()))
@@ -1262,4 +1450,3 @@ fn element_text(element: &document_presentation::authored::Element) -> Option<St
         _ => None,
     }
 }
-

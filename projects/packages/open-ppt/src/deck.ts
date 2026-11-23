@@ -53,6 +53,7 @@ import type {
     PlaybackApi,
     RenderOptions,
     RenderReport,
+    ReplaceTextOptions,
     SaveOptions,
     SaveReport,
     SearchHitList,
@@ -294,6 +295,54 @@ export class Deck {
         this.refresh();
         const slides = this.state.summary.slides.map((slide) => service.slide(this.handle('deck.search'), slide.id));
         return searchSlides(slides, query, { ...options, limit });
+    }
+
+    /**
+     * Replaces text across the deck in one atomic edit, without rendering.
+     *
+     * Every match of `find` inside a text run of a text element or a table
+     * cell is replaced with `replace`; a match spanning two runs stays
+     * untouched. Matching mirrors {@link search}: case-insensitive by default,
+     * and `wholeWord: true` only replaces matches delimited by non-word
+     * characters. `slideIds` restricts the rewrite to those slides, and unknown
+     * ids are ignored. The returned number counts the replaced matches. An
+     * empty `find` is `session/argument-invalid`.
+     */
+    async replaceText(find: string, replace: string, options: ReplaceTextOptions = {}): Promise<number> {
+        this.assertOpen('deck.replaceText');
+        if (typeof find !== 'string' || find.length === 0) {
+            throw new OpenPPTError('session/argument-invalid', '`find` must be a non-empty string');
+        }
+        if (typeof replace !== 'string') {
+            throw new OpenPPTError('session/argument-invalid', '`replace` must be a string');
+        }
+        if (options.caseSensitive !== undefined && typeof options.caseSensitive !== 'boolean') {
+            throw new OpenPPTError('session/argument-invalid', '`caseSensitive` must be a boolean');
+        }
+        if (options.wholeWord !== undefined && typeof options.wholeWord !== 'boolean') {
+            throw new OpenPPTError('session/argument-invalid', '`wholeWord` must be a boolean');
+        }
+        if (
+            options.slideIds !== undefined
+            && (!Array.isArray(options.slideIds)
+                || options.slideIds.some((id) => typeof id !== 'string' || id.trim().length === 0))
+        ) {
+            throw new OpenPPTError('session/argument-invalid', '`slideIds` must be an array of slide ids');
+        }
+        const report = this.apply(
+            [
+                {
+                    op: 'deck.replaceText',
+                    find,
+                    replace,
+                    caseSensitive: options.caseSensitive,
+                    wholeWord: options.wholeWord,
+                    slideIds: options.slideIds,
+                },
+            ],
+            options.expectedRevision,
+        );
+        return Number(report.results[0]);
     }
 
     /**
