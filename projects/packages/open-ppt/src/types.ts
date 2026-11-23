@@ -327,7 +327,8 @@ export interface ElementPatch {
     readonly alt?: string;
     readonly text?: TextInput;
     readonly style?: TextStyle;
-    readonly fill?: string;
+    /** Solid fill for a shape element; `null` clears the fill. */
+    readonly fill?: string | null;
     readonly data?: ChartData;
     readonly expectedRevision?: number;
 }

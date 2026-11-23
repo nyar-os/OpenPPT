@@ -1318,3 +1318,68 @@ fn slide_set_layout_rejects_unknown_objects_and_arguments() {
     assert_eq!(deck.revision(), revision, "failed layout edits consume no revision");
     assert!(slide_detail(&deck, &slide).expect("slide exists")["layout"].is_null(), "the slide keeps its layout");
 }
+
+#[test]
+fn element_set_fill_repaints_and_clears_a_shape() {
+    let (mut deck, slide, first, _second) = two_shapes();
+    let revision = deck.revision();
+    let report = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "element.setFill", "slideId": slide, "elementId": first, "fill": "#0000FF" }] }),
+    )
+    .expect("repainting a shape commits");
+    assert!(report["results"][0].is_null(), "no object is created");
+    assert_eq!(report["revision"], revision + 1, "one script bumps one revision");
+    let page = svg(&deck);
+    assert!(page.contains("fill=\"#0000FF\"") && !page.contains("fill=\"#FF0000\""), "the restyled shape paints blue: {page}");
+    assert!(page.contains("fill=\"#00FF00\""), "the untouched shape keeps its paint");
+
+    edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "element.setFill", "slideId": slide, "elementId": first, "fill": null }] }),
+    )
+    .expect("clearing the fill commits");
+    let page = svg(&deck);
+    assert!(!page.contains("fill=\"#0000FF\""), "the cleared shape no longer paints blue: {page}");
+    assert!(page.contains("fill=\"none\""), "the cleared shape renders unpainted: {page}");
+}
+
+#[test]
+fn element_set_fill_refuses_non_shapes_and_bad_arguments() {
+    let (mut deck, _first, second) = replace_deck();
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let text_element = detail["elements"][0]["id"].as_str().expect("element id").to_string();
+    let revision = deck.revision();
+
+    let error = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "element.setFill", "slideId": second, "elementId": text_element, "fill": "#0000FF" }] }),
+    )
+    .expect_err("text carries no fill");
+    assert_eq!(error.code, "object/type-mismatch");
+
+    let error = edit(
+        &mut deck,
+        &json!({
+            "operations": [{ "op": "element.setFill", "slideId": second, "elementId": "element-missing", "fill": "#0000FF" }],
+        }),
+    )
+    .expect_err("an unknown element is refused");
+    assert_eq!(error.code, "object/not-found");
+
+    let error = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "element.setFill", "slideId": "slide-missing", "elementId": text_element, "fill": "#0000FF" }] }),
+    )
+    .expect_err("an unknown slide is refused");
+    assert_eq!(error.code, "object/not-found");
+
+    let error = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "element.setFill", "slideId": second, "elementId": text_element, "fill": 42 }] }),
+    )
+    .expect_err("a non-string fill is refused");
+    assert_eq!(error.code, "session/argument-invalid");
+
+    assert_eq!(deck.revision(), revision, "failed fills consume no revision");
+}

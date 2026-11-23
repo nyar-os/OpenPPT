@@ -53,6 +53,7 @@ enum Deferred {
     TableRows { slide: SlideId, element: ElementId, rows: Vec<TableRow> },
     RemoveAsset { asset: AssetId },
     SetLayout { slide: SlideId, layout: Option<LayoutId> },
+    SetFill { slide: SlideId, element: ElementId, fill: Option<Fill> },
 }
 
 /// Applies deferred edits to the committed document and rebuilds the deck.
@@ -108,6 +109,19 @@ fn apply_deferred(deck: &mut Deck, deferred: Vec<Deferred>) -> Result<(), Servic
             Deferred::SetLayout { slide, layout } => {
                 if let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide) {
                     model.layout = layout;
+                }
+            }
+            Deferred::SetFill { slide, element, fill } => {
+                let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide)
+                else {
+                    continue;
+                };
+                let Some(target) = model.elements.iter_mut().find(|candidate| candidate.id == element)
+                else {
+                    continue;
+                };
+                if let ElementContent::Shape(shape) = &mut target.content {
+                    shape.fill = fill;
                 }
             }
         }
@@ -495,6 +509,31 @@ impl EditState {
                 let style = TextStyle::parse(operation)?;
                 let content = styled_content(draft, &slide, &element, &style)?;
                 draft.set_element_text(&slide, &element, content)?;
+                None
+            }
+            "element.setFill" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let fill = match required(operation, "fill")? {
+                    Value::Null => None,
+                    Value::String(color) => Some(Fill::Solid { color: color.clone() }),
+                    _ => return Err(invalid("`fill` must be a CSS colour string or null")),
+                };
+                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
+                let target = model.element(&element).ok_or_else(|| {
+                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
+                        .with_slide(slide.clone())
+                        .with_element(element.clone())
+                })?;
+                if !matches!(target.content, ElementContent::Shape(_)) {
+                    return Err(DeckError::new(
+                        codes::OBJECT_TYPE_MISMATCH,
+                        format!("element `{element}` is not a shape; only shapes carry a fill"),
+                    )
+                    .with_slide(slide.clone())
+                    .with_element(element.clone()));
+                }
+                self.deferred.push(Deferred::SetFill { slide, element, fill });
                 None
             }
             "element.setChartData" => {

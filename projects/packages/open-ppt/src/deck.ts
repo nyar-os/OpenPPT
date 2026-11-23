@@ -1093,9 +1093,7 @@ function patchOperations(slideId: SlideId, elementId: ElementId, patch: ElementP
         operations.push({ op: 'element.setChartData', slideId, elementId, data: patch.data });
     }
     if (patch.fill !== undefined) {
-        throw new OpenPPTError('object/unsupported', 'updating a fill in place is not editable yet', {
-            details: { feature: 'elements.update.fill' },
-        });
+        operations.push({ op: 'element.setFill', slideId, elementId, fill: patch.fill });
     }
     return operations;
 }
