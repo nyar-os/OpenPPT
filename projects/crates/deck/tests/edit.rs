@@ -1273,3 +1273,48 @@ fn asset_remove_refuses_referenced_and_unknown_assets() {
     assert_eq!(deck.revision(), revision, "failed removals consume no revision");
     assert_eq!(asset_ids(&deck).len(), 2, "both assets survive the failed removals");
 }
+
+#[test]
+fn slide_set_layout_applies_and_clears_the_layout() {
+    let (mut deck, slide) = background_deck();
+    let layout = deck.document().layouts.first().expect("the default deck has a layout").id.as_str().to_string();
+    let revision = deck.revision();
+    let report = edit(&mut deck, &json!({ "operations": [{ "op": "slide.setLayout", "slideId": slide, "layout": layout }] }))
+        .expect("applying a layout commits");
+    assert!(report["results"][0].is_null(), "no object is created");
+    assert_eq!(report["revision"], revision + 1, "one script bumps one revision");
+    assert_eq!(slide_detail(&deck, &slide).expect("slide exists")["layout"], layout);
+
+    edit(&mut deck, &json!({ "operations": [{ "op": "slide.setLayout", "slideId": slide, "layout": null }] }))
+        .expect("clearing the layout commits");
+    assert!(slide_detail(&deck, &slide).expect("slide exists")["layout"].is_null());
+}
+
+#[test]
+fn slide_set_layout_rejects_unknown_objects_and_arguments() {
+    let (mut deck, slide) = background_deck();
+    let revision = deck.revision();
+
+    let error = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "slide.setLayout", "slideId": "slide-missing", "layout": "layout-1" }] }),
+    )
+    .expect_err("an unknown slide is refused");
+    assert_eq!(error.code, "object/not-found");
+
+    let error =
+        edit(&mut deck, &json!({ "operations": [{ "op": "slide.setLayout", "slideId": slide, "layout": "layout-missing" }] }))
+            .expect_err("an unknown layout is refused");
+    assert_eq!(error.code, "object/not-found");
+
+    let error = edit(&mut deck, &json!({ "operations": [{ "op": "slide.setLayout", "slideId": slide }] }))
+        .expect_err("a missing layout is refused");
+    assert_eq!(error.code, "session/argument-invalid");
+
+    let error = edit(&mut deck, &json!({ "operations": [{ "op": "slide.setLayout", "slideId": slide, "layout": 42 }] }))
+        .expect_err("a non-string layout is refused");
+    assert_eq!(error.code, "session/argument-invalid");
+
+    assert_eq!(deck.revision(), revision, "failed layout edits consume no revision");
+    assert!(slide_detail(&deck, &slide).expect("slide exists")["layout"].is_null(), "the slide keeps its layout");
+}

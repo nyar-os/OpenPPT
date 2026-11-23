@@ -52,6 +52,7 @@ enum Deferred {
     Background { slide: SlideId, fill: Option<Fill> },
     TableRows { slide: SlideId, element: ElementId, rows: Vec<TableRow> },
     RemoveAsset { asset: AssetId },
+    SetLayout { slide: SlideId, layout: Option<LayoutId> },
 }
 
 /// Applies deferred edits to the committed document and rebuilds the deck.
@@ -104,6 +105,11 @@ fn apply_deferred(deck: &mut Deck, deferred: Vec<Deferred>) -> Result<(), Servic
                 }
             }
             Deferred::RemoveAsset { asset } => document.assets.retain(|candidate| candidate.id != asset),
+            Deferred::SetLayout { slide, layout } => {
+                if let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide) {
+                    model.layout = layout;
+                }
+            }
         }
     }
     *deck = Deck::from_document(document).map_err(ServiceError::from)?;
@@ -339,6 +345,26 @@ impl EditState {
                     );
                 }
                 self.deferred.push(Deferred::Background { slide, fill });
+                None
+            }
+            "slide.setLayout" => {
+                let slide = self.slide(operation)?;
+                if draft.document().slide(&slide).is_none() {
+                    return Err(missing_slide(&slide));
+                }
+                let layout = match required(operation, "layout")? {
+                    Value::Null => None,
+                    Value::String(raw) => {
+                        let resolved = self.resolve_value(raw)?;
+                        let layout = LayoutId::new(resolved).ok_or_else(|| invalid("layout identity must not be empty"))?;
+                        if !draft.document().layouts.iter().any(|candidate| candidate.id == layout) {
+                            return Err(DeckError::new(codes::OBJECT_NOT_FOUND, format!("layout `{layout}` does not exist")));
+                        }
+                        Some(layout)
+                    }
+                    _ => return Err(invalid("`layout` must be a layout id string or null")),
+                };
+                self.deferred.push(Deferred::SetLayout { slide, layout });
                 None
             }
             "text.add" => {

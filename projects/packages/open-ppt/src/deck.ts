@@ -638,10 +638,8 @@ class SlideView implements Slide {
         return this.detail().layout;
     }
 
-    set layout(_value: LayoutId | null) {
-        throw new OpenPPTError('object/unsupported', 'changing a slide layout is not editable yet', {
-            details: { feature: 'slide.layout' },
-        });
+    set layout(value: LayoutId | null) {
+        this.deck.apply([{ op: 'slide.setLayout', slideId: this.slideId, layout: value }]);
     }
 
     private detail(): service.SlideDetail {

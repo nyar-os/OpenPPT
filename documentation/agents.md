@@ -4,7 +4,7 @@ How an agent discovers capabilities, drives the `open-ppt` CLI and composes the 
 
 - **GUI** (`open-ppt open <file>`, `open-ppt play <file>`): humans review layout, drag elements and run the show.
 - **SDK**: anything data-driven or repeated — slide and element edits, notes, charts, inspection loops, previews, save and export.
-- **Not delivered yet**: theme/layout enumeration and application, playback object creation, autofit text, and slide layout changes. The engine reports these as `object/unsupported` with a feature name.
+- **Not delivered yet**: theme/layout enumeration and application, playback object creation, and autofit text. The engine reports these as `object/unsupported` with a feature name.
 
 ## Discover capabilities first
 
@@ -115,12 +115,12 @@ Common operations:
 | Family | Operations |
 |---|---|
 | Deck | `deck.replaceText` |
-| Slides | `slide.add`, `slide.duplicate`, `slide.remove`, `slide.move`, `slide.reorder`, `slide.setTitle`, `slide.setNotes`, `slide.setHidden`, `slide.setBackground` |
+| Slides | `slide.add`, `slide.duplicate`, `slide.remove`, `slide.move`, `slide.reorder`, `slide.setTitle`, `slide.setNotes`, `slide.setHidden`, `slide.setBackground`, `slide.setLayout` |
 | Elements | `text.add`, `image.add`, `shape.add`, `table.add`, `chart.add`, `formula.add`, `media.add`, `element.remove`, `element.setText`, `element.setTextStyle`, `element.updateTransform`, `element.updateAlt`, `element.setChartData` |
 | Arrange | `element.align`, `element.distribute`, `element.duplicate`, `element.reorder`, `element.bringToFront`, `element.sendToBack`, `element.bringForward`, `element.sendBackward`, `element.lock` |
 | Assets | `asset.add`, `asset.remove` |
 
-`asset.remove` refuses an asset that image or media elements still reference with `object/unsupported`, and an unknown id is `object/not-found`.
+`asset.remove` refuses an asset that image or media elements still reference with `object/unsupported`, and an unknown id is `object/not-found`. `slide.setLayout` applies a known layout id or clears it with `null`; an unknown slide or layout is `object/not-found`. Layout ids come from `summary().layouts`; the dedicated `layouts` and `themes` APIs are still not delivered.
 
 A batch is atomic: it either advances the deck revision once or leaves the previous revision untouched. Pass `--expected-revision` to reject a stale writer with `deck/revision-conflict`.
 
