@@ -1615,3 +1615,78 @@ fn table_cell_style_stamps_every_run_of_one_cell() {
     assert_eq!(deck.revision(), before, "failed requests leave the revision untouched");
 }
 
+
+#[test]
+fn table_rows_insert_and_delete_with_heights_and_guards() {
+    let (mut deck, _first, second) = replace_deck();
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let table = detail["elements"][1]["id"].as_str().expect("table id").to_owned();
+    let revision = deck.revision();
+
+    let report = edit(
+        &mut deck,
+        &json!({ "operations": [{
+            "op": "table.insertRow",
+            "slideId": second,
+            "elementId": table,
+            "row": 2,
+            "cells": ["Tax", "10"],
+        }] }),
+    )
+    .expect("append a row");
+    assert_eq!(report["revision"], revision + 1);
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let rows = detail["elements"][1]["content"]["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[2]["cells"][0]["text"], json!("Tax"));
+    assert_eq!(rows[2]["cells"][1]["text"], json!("10"));
+    assert_eq!(rows[2]["heightPt"], json!(30.0), "the new row inherits the last row height");
+
+    edit(
+        &mut deck,
+        &json!({ "operations": [{
+            "op": "table.insertRow",
+            "slideId": second,
+            "elementId": table,
+            "row": 0,
+            "heightPt": 42.5,
+        }] }),
+    )
+    .expect("insert a blank row first");
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let rows = detail["elements"][1]["content"]["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows[0]["cells"][0]["text"], json!(""));
+    assert_eq!(rows[0]["cells"][1]["text"], json!(""));
+    assert_eq!(rows[0]["heightPt"], json!(42.5));
+
+    edit(&mut deck, &json!({ "operations": [{ "op": "table.deleteRow", "slideId": second, "elementId": table, "row": 0 }] }))
+        .expect("delete the blank row");
+    edit(&mut deck, &json!({ "operations": [{ "op": "table.deleteRow", "slideId": second, "elementId": table, "row": 2 }] }))
+        .expect("delete the appended row");
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let rows = detail["elements"][1]["content"]["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["cells"][0]["text"], json!("Revenue"));
+    assert_eq!(rows[1]["cells"][0]["text"], json!("Cost"));
+
+    let (mut errors, _first, second) = replace_deck();
+    let detail = slide_detail(&errors, &second).expect("slide exists");
+    let table = detail["elements"][1]["id"].as_str().expect("table id").to_owned();
+    let text_element = detail["elements"][0]["id"].as_str().expect("text id").to_owned();
+    edit(&mut errors, &json!({ "operations": [{ "op": "table.deleteRow", "slideId": second, "elementId": table, "row": 1 }] }))
+        .expect("shrink to one row");
+    let before = errors.revision();
+    for operation in [
+        json!({ "op": "table.insertRow", "slideId": second, "elementId": table, "row": 9, "cells": ["x"] }),
+        json!({ "op": "table.insertRow", "slideId": second, "elementId": table, "row": 0, "cells": ["x"] }),
+        json!({ "op": "table.insertRow", "slideId": second, "elementId": table, "row": 0, "heightPt": 0 }),
+        json!({ "op": "table.insertRow", "slideId": second, "elementId": text_element, "row": 0 }),
+        json!({ "op": "table.deleteRow", "slideId": second, "elementId": table, "row": 9 }),
+        json!({ "op": "table.deleteRow", "slideId": second, "elementId": table, "row": 0 }),
+        json!({ "op": "table.deleteRow", "slideId": second, "elementId": text_element, "row": 0 }),
+    ] {
+        edit(&mut errors, &json!({ "operations": [operation] })).expect_err("invalid row edit");
+    }
+    assert_eq!(errors.revision(), before, "failed requests leave the revision untouched");
+}

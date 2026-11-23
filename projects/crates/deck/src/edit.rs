@@ -696,6 +696,104 @@ impl EditState {
                 self.queue_table_rows(slide, element, rows);
                 None
             }
+            "table.insertRow" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let index = required_usize(operation, "row")?;
+                let requested = optional_string_array(operation, "cells")?;
+                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
+                let target = model.element(&element).ok_or_else(|| {
+                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
+                        .with_slide(slide.clone())
+                        .with_element(element.clone())
+                })?;
+                let ElementContent::Table(table) = &target.content
+                else {
+                    return Err(DeckError::new(
+                        codes::OBJECT_TYPE_MISMATCH,
+                        format!("element `{element}` is not a table; only tables carry rows"),
+                    )
+                    .with_slide(slide.clone())
+                    .with_element(element.clone()));
+                };
+                let columns = table.column_widths_emu.len();
+                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
+                if index > rows.len() {
+                    return Err(invalid(format!(
+                        "`row` {index} is outside the table's insertion points 0..={}",
+                        rows.len()
+                    )));
+                }
+                if rows.iter().enumerate().any(|(position, row)| {
+                    position < index && row.cells.iter().any(|cell| position + cell.row_span as usize > index)
+                }) {
+                    return Err(invalid("a merged cell spans across the insertion point; insert after it instead"));
+                }
+                let cells = match requested {
+                    Some(texts) => {
+                        if texts.len() != columns {
+                            return Err(invalid(format!(
+                                "`cells` lists {} entries but the table has {columns} columns",
+                                texts.len()
+                            )));
+                        }
+                        texts.into_iter().map(TableCell::plain).collect::<Vec<_>>()
+                    }
+                    None => (0..columns).map(|_| TableCell::plain("")).collect::<Vec<_>>(),
+                };
+                let height_emu = match operation.get("heightPt") {
+                    None | Some(Value::Null) => rows
+                        .get(index)
+                        .or_else(|| rows.last())
+                        .map(|row| row.height_emu)
+                        .unwrap_or_else(|| document_presentation::authored::points_to_emu(24.0).unwrap_or_default()),
+                    Some(raw) => raw
+                        .as_f64()
+                        .and_then(document_presentation::authored::points_to_emu)
+                        .ok_or_else(|| invalid("`heightPt` must be a finite positive point height"))?,
+                };
+                rows.insert(index, TableRow { height_emu, cells });
+                self.queue_table_rows(slide, element, rows);
+                None
+            }
+            "table.deleteRow" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let index = required_usize(operation, "row")?;
+                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
+                let target = model.element(&element).ok_or_else(|| {
+                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
+                        .with_slide(slide.clone())
+                        .with_element(element.clone())
+                })?;
+                let ElementContent::Table(table) = &target.content
+                else {
+                    return Err(DeckError::new(
+                        codes::OBJECT_TYPE_MISMATCH,
+                        format!("element `{element}` is not a table; only tables carry rows"),
+                    )
+                    .with_slide(slide.clone())
+                    .with_element(element.clone()));
+                };
+                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
+                if index >= rows.len() {
+                    return Err(invalid(format!("`row` {index} is outside the table's {} rows", rows.len())));
+                }
+                if rows.len() == 1 {
+                    return Err(invalid("a table must keep at least one row"));
+                }
+                if rows.iter().enumerate().any(|(position, row)| {
+                    row.cells.iter().any(|cell| {
+                        (position < index && position + cell.row_span as usize > index)
+                            || (position == index && cell.row_span > 1)
+                    })
+                }) {
+                    return Err(invalid("row is covered by a merged cell; remove the merge before deleting it"));
+                }
+                rows.remove(index);
+                self.queue_table_rows(slide, element, rows);
+                None
+            }
             "table.setColumnWidths" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
@@ -1138,6 +1236,22 @@ fn optional_string(operation: &Value, key: &str) -> Result<Option<String>, DeckE
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(text)) => Ok(Some(text.clone())),
         Some(_) => Err(invalid(format!("`{key}` must be a string or null"))),
+    }
+}
+
+fn optional_string_array(operation: &Value, key: &str) -> Result<Option<Vec<String>>, DeckError> {
+    match operation.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => {
+            let entries = value.as_array().ok_or_else(|| invalid(format!("`{key}` must be an array of strings")))?;
+            entries
+                .iter()
+                .map(|entry| {
+                    entry.as_str().map(str::to_owned).ok_or_else(|| invalid(format!("`{key}` must be an array of strings")))
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(Some)
+        }
     }
 }
 
