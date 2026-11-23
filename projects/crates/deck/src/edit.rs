@@ -10,8 +10,8 @@ use data_encoding::representation::Base64;
 
 use crate::base64_text;
 use document_presentation::authored::{
-    AssetId, ChartData, ChartElementInput, Deck, DeckEdit, DeckError, EMU_PER_POINT, Element, ElementContent, ElementId, Fill,
-    FormulaElementInput, ImageElementInput, LayoutId, Line, LockFlags, MediaKind, ShapeElementInput, SlideAddOptions, SlideId,
+    AssetId, ChartData, ChartElementInput, Deck, DeckEdit, DeckError, DeckSize, EMU_PER_POINT, Element, ElementContent, ElementId,
+    Fill, FormulaElementInput, ImageElementInput, LayoutId, Line, LockFlags, MediaKind, ShapeElementInput, SlideAddOptions, SlideId,
     TableCell, TableElementInput, TableRow, TextAlign, TextContent, TextElementInput, Transform, codes,
 };
 use serde_json::{Value, json};
@@ -58,6 +58,7 @@ enum Deferred {
     SetColumnWidths { slide: SlideId, element: ElementId, widths: Vec<i64> },
     SetRowHeights { slide: SlideId, element: ElementId, heights: Vec<i64> },
     SetTitle { title: Option<String> },
+    SetSize { size: DeckSize },
 }
 
 /// Applies deferred edits to the committed document and rebuilds the deck.
@@ -110,6 +111,7 @@ fn apply_deferred(deck: &mut Deck, deferred: Vec<Deferred>) -> Result<(), Servic
                 }
             }
             Deferred::SetTitle { title } => document.title = title,
+            Deferred::SetSize { size } => document.size = size,
             Deferred::RemoveAsset { asset } => document.assets.retain(|candidate| candidate.id != asset),
             Deferred::SetLayout { slide, layout } => {
                 if let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide) {
@@ -376,6 +378,30 @@ impl EditState {
                     Some(_) => return Err(invalid("`title` must be a string or null")),
                 };
                 self.deferred.push(Deferred::SetTitle { title });
+                None
+            }
+            "deck.setSize" => {
+                let size = if let Some(ratio) = operation.get("ratio") {
+                    let name = ratio
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .ok_or_else(|| invalid("`ratio` must be a non-empty string such as `16:9`"))?;
+                    DeckSize::named(name)
+                        .ok_or_else(|| invalid(format!("unknown slide ratio `{name}`; use `16:9`, `4:3` or `16:10`")))?
+                }
+                else {
+                    let width = operation.get("width").and_then(Value::as_f64);
+                    let height = operation.get("height").and_then(Value::as_f64);
+                    let (Some(width), Some(height)) = (width, height)
+                    else {
+                        return Err(invalid("`deck.setSize` needs `ratio`, or both `width` and `height` in points"));
+                    };
+                    DeckSize::from_points(width, height).ok_or_else(|| {
+                        invalid("custom slide size must use finite positive point values")
+                    })?
+                };
+                self.deferred.push(Deferred::SetSize { size });
                 None
             }
             "slide.add" => Some(self.add_slide(draft, operation)?),

@@ -1136,6 +1136,36 @@ fn deck_title_sets_trims_and_clears() {
 }
 
 #[test]
+fn deck_size_accepts_named_ratios_and_custom_points() {
+    let (mut deck, _slide) = background_deck();
+    let revision = deck.revision();
+
+    let report = edit(&mut deck, &json!({ "operations": [{ "op": "deck.setSize", "ratio": "4:3" }] }))
+        .expect("named size commits");
+    assert_eq!(report["results"][0], Value::Null);
+    assert_eq!(report["revision"], revision + 1);
+    let sized = summary(&deck);
+    assert_eq!(sized["size"]["widthPt"], json!(720.0), "4:3 is 10 inches wide");
+    assert_eq!(sized["size"]["heightPt"], json!(540.0), "4:3 is 7.5 inches tall");
+
+    edit(&mut deck, &json!({ "operations": [{ "op": "deck.setSize", "width": 960.0, "height": 540.0 }] }))
+        .expect("custom size commits");
+    let sized = summary(&deck);
+    assert_eq!(sized["size"]["widthPt"], json!(960.0));
+    assert_eq!(sized["size"]["heightPt"], json!(540.0));
+
+    for operation in [
+        json!({ "op": "deck.setSize", "ratio": "5:4" }),
+        json!({ "op": "deck.setSize", "width": 960.0 }),
+        json!({ "op": "deck.setSize", "width": 0.0, "height": 540.0 }),
+    ] {
+        let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("bad size");
+        assert_eq!(error.code, "session/argument-invalid");
+    }
+    assert_eq!(deck.revision(), revision + 2, "failed sizes consume no revision");
+}
+
+#[test]
 fn a_failing_duplicate_rolls_back_the_whole_batch() {
     let (mut deck, slide, sources) = duplicate_deck();
     let revision = deck.revision();

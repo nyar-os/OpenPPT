@@ -42,7 +42,7 @@ Project files are native deck files (for example `review.oppt`). Export formats 
 
 Every `search` hit carries `text` (the whole title, element, table or notes unit), `start` and `length` (UTF-16 offsets inside `text`), and `context`: an excerpt with up to 40 characters on each side of the match, with `…` marking a clipped edge. `context` never splits a surrogate pair, so it is safe to print without re-slicing the full `text`.
 
-The same matching options drive deck-wide rewrites. `{ "op": "deck.replaceText", "find": "revenue", "replace": "income", "wholeWord": true }` replaces every match inside the deck's text elements and table cells in one atomic edit and reports the number of replaced matches in `results[0]`; `caseSensitive` and `slideIds` behave exactly like their search counterparts, and a match spanning two text runs is left untouched. `{ "op": "deck.setTitle", "title": "Q3 review" }` sets the deck title after trimming it, and `title: null` or omitting it clears the title; a blank or non-string title is `session/argument-invalid`, and the committed `summary.title` reflects the change.
+The same matching options drive deck-wide rewrites. `{ "op": "deck.replaceText", "find": "revenue", "replace": "income", "wholeWord": true }` replaces every match inside the deck's text elements and table cells in one atomic edit and reports the number of replaced matches in `results[0]`; `caseSensitive` and `slideIds` behave exactly like their search counterparts, and a match spanning two text runs is left untouched. `{ "op": "deck.setTitle", "title": "Q3 review" }` sets the deck title after trimming it, and `title: null` or omitting it clears the title; a blank or non-string title is `session/argument-invalid`, and the committed `summary.title` reflects the change. `{ "op": "deck.setSize", "ratio": "4:3" }` changes the slide extent from a named ratio (`16:9`, `4:3` or `16:10`), while `{ "op": "deck.setSize", "width": 960, "height": 540 }` uses explicit points; an unknown ratio, a missing or non-positive extent is `session/argument-invalid`, and the committed `summary.size` reflects the change.
 
 ## Recommended workflows
 
@@ -114,7 +114,7 @@ Common operations:
 
 | Family | Operations |
 |---|---|
-| Deck | `deck.replaceText`, `deck.setTitle` |
+| Deck | `deck.replaceText`, `deck.setTitle`, `deck.setSize` |
 | Slides | `slide.add`, `slide.duplicate`, `slide.remove`, `slide.move`, `slide.reorder`, `slide.setTitle`, `slide.setNotes`, `slide.setHidden`, `slide.setBackground`, `slide.setLayout` |
 | Elements | `text.add`, `image.add`, `shape.add`, `table.add`, `chart.add`, `formula.add`, `media.add`, `element.remove`, `element.setText`, `element.setTextStyle`, `element.setHyperlink`, `element.updateTransform`, `element.updateAlt`, `element.setChartData`, `element.setFill`, `element.setLine`, `table.setCell`, `table.setCellStyle`, `table.insertRow`, `table.deleteRow`, `table.insertColumn`, `table.deleteColumn`, `table.setColumnWidths`, `table.setRowHeights` |
 | Arrange | `element.align`, `element.distribute`, `element.duplicate`, `element.reorder`, `element.bringToFront`, `element.sendToBack`, `element.bringForward`, `element.sendBackward`, `element.lock` |
