@@ -794,6 +794,132 @@ impl EditState {
                 self.queue_table_rows(slide, element, rows);
                 None
             }
+            "table.insertColumn" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let index = required_usize(operation, "column")?;
+                let requested = optional_string_array(operation, "cells")?;
+                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
+                let target = model.element(&element).ok_or_else(|| {
+                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
+                        .with_slide(slide.clone())
+                        .with_element(element.clone())
+                })?;
+                let ElementContent::Table(table) = &target.content
+                else {
+                    return Err(DeckError::new(
+                        codes::OBJECT_TYPE_MISMATCH,
+                        format!("element `{element}` is not a table; only tables carry columns"),
+                    )
+                    .with_slide(slide.clone())
+                    .with_element(element.clone()));
+                };
+                let mut widths = Self::queued_widths(&self.deferred, &slide, &element).unwrap_or_else(|| table.column_widths_emu.clone());
+                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
+                if index > widths.len() {
+                    return Err(invalid(format!(
+                        "`column` {index} is outside the table's insertion points 0..={}",
+                        widths.len()
+                    )));
+                }
+                for row in &rows {
+                    let mut position = 0usize;
+                    for cell in &row.cells {
+                        if position < index && position + cell.column_span as usize > index {
+                            return Err(invalid("a merged cell spans across the insertion point; insert after it instead"));
+                        }
+                        position += cell.column_span as usize;
+                    }
+                }
+                let texts = match requested {
+                    Some(texts) => {
+                        if texts.len() != rows.len() {
+                            return Err(invalid(format!(
+                                "`cells` lists {} entries but the table has {} rows",
+                                texts.len(),
+                                rows.len()
+                            )));
+                        }
+                        texts
+                    }
+                    None => vec![String::new(); rows.len()],
+                };
+                let width_emu = match operation.get("widthPt") {
+                    None | Some(Value::Null) => {
+                        widths.get(index).or_else(|| widths.last()).copied().unwrap_or_default()
+                    }
+                    Some(raw) => raw
+                        .as_f64()
+                        .and_then(document_presentation::authored::points_to_emu)
+                        .ok_or_else(|| invalid("`widthPt` must be a finite positive point width"))?,
+                };
+                for (position_in_rows, row) in rows.iter_mut().enumerate() {
+                    let text = texts[position_in_rows].clone();
+                    let mut position = 0usize;
+                    let mut cell_index = 0usize;
+                    while position < index && cell_index < row.cells.len() {
+                        position += row.cells[cell_index].column_span as usize;
+                        cell_index += 1;
+                    }
+                    row.cells.insert(cell_index, TableCell::plain(text));
+                }
+                widths.insert(index, width_emu);
+                self.queue_table_rows(slide.clone(), element.clone(), rows);
+                self.deferred.push(Deferred::SetColumnWidths { slide, element, widths });
+                None
+            }
+            "table.deleteColumn" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let index = required_usize(operation, "column")?;
+                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
+                let target = model.element(&element).ok_or_else(|| {
+                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
+                        .with_slide(slide.clone())
+                        .with_element(element.clone())
+                })?;
+                let ElementContent::Table(table) = &target.content
+                else {
+                    return Err(DeckError::new(
+                        codes::OBJECT_TYPE_MISMATCH,
+                        format!("element `{element}` is not a table; only tables carry columns"),
+                    )
+                    .with_slide(slide.clone())
+                    .with_element(element.clone()));
+                };
+                let mut widths = Self::queued_widths(&self.deferred, &slide, &element).unwrap_or_else(|| table.column_widths_emu.clone());
+                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
+                if index >= widths.len() {
+                    return Err(invalid(format!("`column` {index} is outside the table's {} columns", widths.len())));
+                }
+                if widths.len() == 1 {
+                    return Err(invalid("a table must keep at least one column"));
+                }
+                for row in &rows {
+                    let mut position = 0usize;
+                    for cell in &row.cells {
+                        let span = cell.column_span as usize;
+                        if span > 1 && position <= index && position + span > index {
+                            return Err(invalid("column is covered by a merged cell; remove the merge before deleting it"));
+                        }
+                        position += span;
+                    }
+                }
+                for row in &mut rows {
+                    let mut position = 0usize;
+                    for cell_index in 0..row.cells.len() {
+                        if position == index {
+                            row.cells.remove(cell_index);
+                            break;
+                        }
+                        position += row.cells[cell_index].column_span as usize;
+                    }
+                }
+                widths.remove(index);
+                self.queue_table_rows(slide.clone(), element.clone(), rows);
+                self.deferred.push(Deferred::SetColumnWidths { slide, element, widths });
+                None
+            }
             "table.setColumnWidths" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
@@ -926,7 +1052,19 @@ impl EditState {
         Ok(())
     }
 
-    /// Queues a table's rebuilt rows, replacing an earlier cell edit on the same
+    /// The most recently queued column widths for one table, if any.
+fn queued_widths(deferred: &[Deferred], slide: &SlideId, element: &ElementId) -> Option<Vec<i64>> {
+    deferred.iter().rev().find_map(|entry| match entry {
+        Deferred::SetColumnWidths { slide: queued_slide, element: queued_element, widths }
+            if queued_slide == slide && queued_element == element =>
+        {
+            Some(widths.clone())
+        }
+        _ => None,
+    })
+}
+
+/// Queues a table's rebuilt rows, replacing an earlier cell edit on the same
     /// element so several `table.setCell` operations compose in one script.
     fn queue_table_rows(&mut self, slide: SlideId, element: ElementId, rows: Vec<TableRow>) {
         for entry in &mut self.deferred {
@@ -1968,3 +2106,4 @@ fn element_text(element: &document_presentation::authored::Element) -> Option<St
         _ => None,
     }
 }
+

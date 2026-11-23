@@ -1690,3 +1690,71 @@ fn table_rows_insert_and_delete_with_heights_and_guards() {
     }
     assert_eq!(errors.revision(), before, "failed requests leave the revision untouched");
 }
+
+#[test]
+fn table_columns_insert_and_delete_with_widths_and_guards() {
+    let (mut deck, _first, second) = replace_deck();
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let table = detail["elements"][1]["id"].as_str().expect("table id").to_owned();
+
+    edit(
+        &mut deck,
+        &json!({ "operations": [{
+            "op": "table.insertColumn",
+            "slideId": second,
+            "elementId": table,
+            "column": 2,
+            "cells": ["Note", "More"],
+            "widthPt": 50,
+        }] }),
+    )
+    .expect("append a column");
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    assert_eq!(detail["elements"][1]["content"]["columnWidthsPt"], json!([100.0, 100.0, 50.0]));
+    assert_eq!(detail["elements"][1]["content"]["rows"][0]["cells"][2]["text"], json!("Note"));
+    assert_eq!(detail["elements"][1]["content"]["rows"][1]["cells"][2]["text"], json!("More"));
+
+    edit(
+        &mut deck,
+        &json!({ "operations": [{
+            "op": "table.insertColumn",
+            "slideId": second,
+            "elementId": table,
+            "column": 0,
+        }] }),
+    )
+    .expect("insert a blank column first");
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    assert_eq!(detail["elements"][1]["content"]["columnWidthsPt"], json!([100.0, 100.0, 100.0, 50.0]));
+    assert_eq!(detail["elements"][1]["content"]["rows"][0]["cells"][0]["text"], json!(""));
+
+    edit(&mut deck, &json!({ "operations": [{ "op": "table.deleteColumn", "slideId": second, "elementId": table, "column": 0 }] }))
+        .expect("delete the blank column");
+    edit(&mut deck, &json!({ "operations": [{ "op": "table.deleteColumn", "slideId": second, "elementId": table, "column": 2 }] }))
+        .expect("delete the appended column");
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    assert_eq!(detail["elements"][1]["content"]["columnWidthsPt"], json!([100.0, 100.0]));
+    assert_eq!(detail["elements"][1]["content"]["rows"][0]["cells"][0]["text"], json!("Revenue"));
+    assert_eq!(detail["elements"][1]["content"]["rows"][0]["cells"][1]["text"], json!("Q4 revenue plan"));
+
+    let (mut errors, _first, second) = replace_deck();
+    let detail = slide_detail(&errors, &second).expect("slide exists");
+    let table = detail["elements"][1]["id"].as_str().expect("table id").to_owned();
+    let text_element = detail["elements"][0]["id"].as_str().expect("text id").to_owned();
+    for operation in [
+        json!({ "op": "table.insertColumn", "slideId": second, "elementId": table, "column": 9 }),
+        json!({ "op": "table.insertColumn", "slideId": second, "elementId": table, "column": 0, "cells": ["x"] }),
+        json!({ "op": "table.insertColumn", "slideId": second, "elementId": table, "column": 0, "widthPt": 0 }),
+        json!({ "op": "table.insertColumn", "slideId": second, "elementId": text_element, "column": 0 }),
+        json!({ "op": "table.deleteColumn", "slideId": second, "elementId": table, "column": 9 }),
+        json!({ "op": "table.deleteColumn", "slideId": second, "elementId": text_element, "column": 0 }),
+    ] {
+        edit(&mut errors, &json!({ "operations": [operation] })).expect_err("invalid column edit");
+    }
+    edit(&mut errors, &json!({ "operations": [{ "op": "table.deleteColumn", "slideId": second, "elementId": table, "column": 1 }] }))
+        .expect("shrink to one column");
+    let before = errors.revision();
+    edit(&mut errors, &json!({ "operations": [{ "op": "table.deleteColumn", "slideId": second, "elementId": table, "column": 0 }] }))
+        .expect_err("a table keeps one column");
+    assert_eq!(errors.revision(), before, "failed requests leave the revision untouched");
+}
