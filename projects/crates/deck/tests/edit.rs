@@ -1433,6 +1433,48 @@ fn table_set_cell_rewrites_text_and_fill_and_composes() {
 }
 
 #[test]
+fn table_geometry_rewrites_column_widths_and_row_heights() {
+    let (mut deck, _first, second) = replace_deck();
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let element = detail["elements"][1]["id"].as_str().expect("table id").to_string();
+    assert_eq!(detail["elements"][1]["content"]["columnWidthsPt"], json!([100.0, 100.0]));
+    assert_eq!(detail["elements"][1]["content"]["rows"][0]["heightPt"], json!(30.0));
+
+    let revision = deck.revision();
+    let report = edit(
+        &mut deck,
+        &json!({ "operations": [
+            { "op": "table.setColumnWidths", "slideId": second, "elementId": element, "columnWidthsPt": [120.0, 80.0] },
+            { "op": "table.setRowHeights", "slideId": second, "elementId": element, "rowHeightsPt": [42.5, 25.0] },
+        ] }),
+    )
+    .expect("table geometry commits");
+    assert_eq!(report["revision"], revision + 1, "one script bumps one revision");
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    assert_eq!(detail["elements"][1]["content"]["columnWidthsPt"], json!([120.0, 80.0]));
+    assert_eq!(detail["elements"][1]["content"]["rows"][0]["heightPt"], json!(42.5));
+    assert_eq!(detail["elements"][1]["content"]["rows"][1]["heightPt"], json!(25.0));
+    assert_eq!(detail["elements"][1]["content"]["rows"][0]["cells"][0]["text"], json!("Revenue"), "cells stay put");
+
+    let text_element = detail["elements"][0]["id"].as_str().expect("text id").to_string();
+    let error = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "table.setColumnWidths", "slideId": second, "elementId": text_element, "columnWidthsPt": [100.0] }] }),
+    )
+    .expect_err("text is not a table");
+    assert_eq!(error.code, "object/type-mismatch");
+    for operation in [
+        json!({ "op": "table.setColumnWidths", "slideId": second, "elementId": element, "columnWidthsPt": [100.0] }),
+        json!({ "op": "table.setRowHeights", "slideId": second, "elementId": element, "rowHeightsPt": [30.0] }),
+        json!({ "op": "table.setColumnWidths", "slideId": second, "elementId": element, "columnWidthsPt": [0.0, 100.0] }),
+        json!({ "op": "table.setRowHeights", "slideId": second, "elementId": element, "rowHeightsPt": [] }),
+    ] {
+        let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("bad geometry is refused");
+        assert_eq!(error.code, "session/argument-invalid");
+    }
+}
+
+#[test]
 fn table_set_cell_refuses_non_tables_and_bad_coordinates() {
     let (mut deck, _first, second) = replace_deck();
     let detail = slide_detail(&deck, &second).expect("slide exists");

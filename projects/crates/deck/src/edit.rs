@@ -55,6 +55,8 @@ enum Deferred {
     SetLayout { slide: SlideId, layout: Option<LayoutId> },
     SetFill { slide: SlideId, element: ElementId, fill: Option<Fill> },
     SetLine { slide: SlideId, element: ElementId, line: Option<Line> },
+    SetColumnWidths { slide: SlideId, element: ElementId, widths: Vec<i64> },
+    SetRowHeights { slide: SlideId, element: ElementId, heights: Vec<i64> },
 }
 
 /// Applies deferred edits to the committed document and rebuilds the deck.
@@ -136,6 +138,34 @@ fn apply_deferred(deck: &mut Deck, deferred: Vec<Deferred>) -> Result<(), Servic
                 };
                 if let ElementContent::Shape(shape) = &mut target.content {
                     shape.line = line;
+                }
+            }
+            Deferred::SetColumnWidths { slide, element, widths } => {
+                let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide)
+                else {
+                    continue;
+                };
+                let Some(target) = model.elements.iter_mut().find(|candidate| candidate.id == element)
+                else {
+                    continue;
+                };
+                if let ElementContent::Table(table) = &mut target.content {
+                    table.column_widths_emu = widths;
+                }
+            }
+            Deferred::SetRowHeights { slide, element, heights } => {
+                let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide)
+                else {
+                    continue;
+                };
+                let Some(target) = model.elements.iter_mut().find(|candidate| candidate.id == element)
+                else {
+                    continue;
+                };
+                if let ElementContent::Table(table) = &mut target.content {
+                    for (row, height) in table.rows.iter_mut().zip(heights) {
+                        row.height_emu = height;
+                    }
                 }
             }
         }
@@ -618,6 +648,62 @@ impl EditState {
                 self.queue_table_rows(slide, element, rows);
                 None
             }
+            "table.setColumnWidths" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let widths = point_list(operation, "columnWidthsPt")?;
+                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
+                let target = model.element(&element).ok_or_else(|| {
+                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
+                        .with_slide(slide.clone())
+                        .with_element(element.clone())
+                })?;
+                let ElementContent::Table(table) = &target.content
+                else {
+                    return Err(DeckError::new(
+                        codes::OBJECT_TYPE_MISMATCH,
+                        format!("element `{element}` is not a table; only tables carry columns"),
+                    )
+                    .with_slide(slide.clone())
+                    .with_element(element.clone()));
+                };
+                if widths.len() != table.column_widths_emu.len() {
+                    return Err(invalid(format!(
+                        "`columnWidthsPt` needs one width per column; the table has {}",
+                        table.column_widths_emu.len()
+                    )));
+                }
+                self.deferred.push(Deferred::SetColumnWidths { slide, element, widths });
+                None
+            }
+            "table.setRowHeights" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let heights = point_list(operation, "rowHeightsPt")?;
+                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
+                let target = model.element(&element).ok_or_else(|| {
+                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
+                        .with_slide(slide.clone())
+                        .with_element(element.clone())
+                })?;
+                let ElementContent::Table(table) = &target.content
+                else {
+                    return Err(DeckError::new(
+                        codes::OBJECT_TYPE_MISMATCH,
+                        format!("element `{element}` is not a table; only tables carry rows"),
+                    )
+                    .with_slide(slide.clone())
+                    .with_element(element.clone()));
+                };
+                if heights.len() != table.rows.len() {
+                    return Err(invalid(format!(
+                        "`rowHeightsPt` needs one height per row; the table has {}",
+                        table.rows.len()
+                    )));
+                }
+                self.deferred.push(Deferred::SetRowHeights { slide, element, heights });
+                None
+            }
             "element.setChartData" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
@@ -1069,6 +1155,23 @@ fn background_fill(value: &Value) -> Result<Option<Fill>, DeckError> {
 
 fn array<'a>(operation: &'a Value, key: &str) -> Result<&'a Vec<Value>, DeckError> {
     required(operation, key)?.as_array().ok_or_else(|| invalid(format!("`{key}` must be an array")))
+}
+
+/// Reads a non-empty list of positive point values and converts them to EMU.
+fn point_list(operation: &Value, key: &str) -> Result<Vec<i64>, DeckError> {
+    let values = array(operation, key)?;
+    if values.is_empty() {
+        return Err(invalid(format!("`{key}` must list at least one point value")));
+    }
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_f64()
+                .and_then(document_presentation::authored::points_to_emu)
+                .ok_or_else(|| invalid(format!("`{key}` must use finite positive point values")))
+        })
+        .collect()
 }
 
 fn op_name(operation: &Value) -> &str {
