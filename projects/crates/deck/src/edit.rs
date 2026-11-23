@@ -54,6 +54,7 @@ enum Deferred {
     RemoveAsset { asset: AssetId },
     SetLayout { slide: SlideId, layout: Option<LayoutId> },
     SetFill { slide: SlideId, element: ElementId, fill: Option<Fill> },
+    SetLine { slide: SlideId, element: ElementId, line: Option<Line> },
 }
 
 /// Applies deferred edits to the committed document and rebuilds the deck.
@@ -122,6 +123,19 @@ fn apply_deferred(deck: &mut Deck, deferred: Vec<Deferred>) -> Result<(), Servic
                 };
                 if let ElementContent::Shape(shape) = &mut target.content {
                     shape.fill = fill;
+                }
+            }
+            Deferred::SetLine { slide, element, line } => {
+                let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide)
+                else {
+                    continue;
+                };
+                let Some(target) = model.elements.iter_mut().find(|candidate| candidate.id == element)
+                else {
+                    continue;
+                };
+                if let ElementContent::Shape(shape) = &mut target.content {
+                    shape.line = line;
                 }
             }
         }
@@ -536,6 +550,74 @@ impl EditState {
                 self.deferred.push(Deferred::SetFill { slide, element, fill });
                 None
             }
+            "element.setLine" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let line = required_line(operation)?;
+                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
+                let target = model.element(&element).ok_or_else(|| {
+                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
+                        .with_slide(slide.clone())
+                        .with_element(element.clone())
+                })?;
+                if !matches!(target.content, ElementContent::Shape(_)) {
+                    return Err(DeckError::new(
+                        codes::OBJECT_TYPE_MISMATCH,
+                        format!("element `{element}` is not a shape; only shapes carry a line"),
+                    )
+                    .with_slide(slide.clone())
+                    .with_element(element.clone()));
+                }
+                self.deferred.push(Deferred::SetLine { slide, element, line });
+                None
+            }
+            "table.setCell" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let row = required_usize(operation, "row")?;
+                let column = required_usize(operation, "column")?;
+                let text = operation.get("text").and_then(Value::as_str).map(str::to_string);
+                let fill = match operation.get("fill") {
+                    None => None,
+                    Some(Value::Null) => Some(None),
+                    Some(Value::String(color)) => Some(Some(Fill::Solid { color: color.clone() })),
+                    Some(_) => return Err(invalid("`fill` must be a CSS colour string or null")),
+                };
+                if text.is_none() && fill.is_none() {
+                    return Err(invalid("`table.setCell` needs `text` and/or `fill`"));
+                }
+                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
+                let target = model.element(&element).ok_or_else(|| {
+                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
+                        .with_slide(slide.clone())
+                        .with_element(element.clone())
+                })?;
+                let ElementContent::Table(table) = &target.content
+                else {
+                    return Err(DeckError::new(
+                        codes::OBJECT_TYPE_MISMATCH,
+                        format!("element `{element}` is not a table; only tables carry cells"),
+                    )
+                    .with_slide(slide.clone())
+                    .with_element(element.clone()));
+                };
+                if row >= table.rows.len() {
+                    return Err(invalid(format!("`row` {row} is outside the table's {} rows", table.rows.len())));
+                }
+                let columns = table.rows[row].cells.len();
+                if column >= columns {
+                    return Err(invalid(format!("`column` {column} is outside row {row}'s {columns} cells")));
+                }
+                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
+                if let Some(text) = text {
+                    rows[row].cells[column].text = TextContent::plain(text);
+                }
+                if let Some(fill) = fill {
+                    rows[row].cells[column].fill = fill;
+                }
+                self.queue_table_rows(slide, element, rows);
+                None
+            }
             "element.setChartData" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
@@ -610,6 +692,21 @@ impl EditState {
         }
         self.results.push(created);
         Ok(())
+    }
+
+    /// Queues a table's rebuilt rows, replacing an earlier cell edit on the same
+    /// element so several `table.setCell` operations compose in one script.
+    fn queue_table_rows(&mut self, slide: SlideId, element: ElementId, rows: Vec<TableRow>) {
+        for entry in &mut self.deferred {
+            if let Deferred::TableRows { slide: queued_slide, element: queued_element, rows: queued_rows } = entry
+                && *queued_slide == slide
+                && *queued_element == element
+            {
+                *queued_rows = rows;
+                return;
+            }
+        }
+        self.deferred.push(Deferred::TableRows { slide, element, rows });
     }
 
     fn add_slide(&mut self, draft: &mut DeckEdit, operation: &Value) -> Result<String, DeckError> {
@@ -1441,6 +1538,53 @@ fn optional_fill(value: Option<&Value>) -> Result<Option<Fill>, DeckError> {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(color)) => Ok(Some(Fill::Solid { color: color.clone() })),
         Some(_) => Err(invalid("`fill` must be a CSS colour string or null")),
+    }
+}
+
+/// Rows already queued for one table, so a later cell edit starts from them.
+fn queued_rows(deferred: &[Deferred], slide: &SlideId, element: &ElementId) -> Option<Vec<TableRow>> {
+    deferred.iter().find_map(|entry| match entry {
+        Deferred::TableRows { slide: queued_slide, element: queued_element, rows }
+            if queued_slide == slide && queued_element == element =>
+        {
+            Some(rows.clone())
+        }
+        _ => None,
+    })
+}
+
+/// Parses the `line` argument of `element.setLine`.
+///
+/// A null clears the stroke; otherwise at least one of `color` and `widthPt`
+/// must be present. The width is a positive point value, stored as EMU.
+fn required_line(operation: &Value) -> Result<Option<Line>, DeckError> {
+    match operation.get("line") {
+        None => Err(invalid("`element.setLine` needs a `line` object or null")),
+        Some(Value::Null) => Ok(None),
+        Some(value) => {
+            let color = match value.get("color") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(color)) => Some(color.clone()),
+                Some(_) => return Err(invalid("`line.color` must be a CSS colour string")),
+            };
+            let width = match value.get("widthPt") {
+                None | Some(Value::Null) => None,
+                Some(raw) => {
+                    let points = raw
+                        .as_f64()
+                        .filter(|points| points.is_finite() && *points > 0.0 && *points <= 1584.0)
+                        .ok_or_else(|| invalid("`line.widthPt` must be a number between 0 and 1584 points"))?;
+                    Some(
+                        document_presentation::authored::points_to_emu(points)
+                            .ok_or_else(|| invalid("`line.widthPt` is outside the drawable range"))?,
+                    )
+                }
+            };
+            if color.is_none() && width.is_none() {
+                return Err(invalid("`line` needs a `color` and/or a `widthPt`"));
+            }
+            Ok(Some(Line { color, width_emu: width }))
+        }
     }
 }
 

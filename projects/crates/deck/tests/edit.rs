@@ -1320,6 +1320,143 @@ fn slide_set_layout_rejects_unknown_objects_and_arguments() {
 }
 
 #[test]
+fn element_set_line_strokes_and_clears_a_shape() {
+    let (mut deck, slide, first, second) = two_shapes();
+    let revision = deck.revision();
+    let report = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "element.setLine", "slideId": slide, "elementId": first, "line": { "color": "#0000FF", "widthPt": 2.5 } }] }),
+    )
+    .expect("stroking a shape commits");
+    assert_eq!(report["revision"], revision + 1, "one script bumps one revision");
+    let detail = slide_detail(&deck, &slide).expect("slide exists");
+    let stroke = detail["elements"]
+        .as_array()
+        .expect("elements")
+        .iter()
+        .find(|element| element["id"] == json!(first))
+        .expect("the stroked element")["content"]["line"]
+        .clone();
+    assert_eq!(stroke["color"], json!("#0000FF"));
+    assert_eq!(stroke["widthPt"], json!(2.5));
+    let untouched = detail["elements"]
+        .as_array()
+        .expect("elements")
+        .iter()
+        .find(|element| element["id"] == json!(second))
+        .expect("the other element");
+    assert!(untouched["content"]["line"].is_null(), "the other shape keeps its line");
+
+    edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "element.setLine", "slideId": slide, "elementId": first, "line": null }] }),
+    )
+    .expect("clearing the line commits");
+    let detail = slide_detail(&deck, &slide).expect("slide exists");
+    assert!(
+        detail["elements"]
+            .as_array()
+            .expect("elements")
+            .iter()
+            .find(|element| element["id"] == json!(first))
+            .expect("the stroked element")["content"]["line"]
+            .is_null(),
+        "the cleared shape keeps no line"
+    );
+}
+
+#[test]
+fn element_set_line_refuses_non_shapes_and_bad_arguments() {
+    let (mut deck, _first, second) = replace_deck();
+    let text_element =
+        slide_detail(&deck, &second).expect("slide exists")["elements"][0]["id"].as_str().expect("element id").to_string();
+    let revision = deck.revision();
+    for operation in [
+        json!({ "op": "element.setLine", "slideId": second, "elementId": text_element, "line": { "color": "#0000FF" } }),
+        json!({ "op": "element.setLine", "slideId": second, "elementId": "element-missing", "line": { "color": "#0000FF" } }),
+        json!({ "op": "element.setLine", "slideId": "slide-missing", "elementId": text_element, "line": { "color": "#0000FF" } }),
+    ] {
+        let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("the target is refused");
+        assert!(
+            error.code == "object/type-mismatch" || error.code == "object/not-found",
+            "unexpected code {}",
+            error.code
+        );
+    }
+    for line in [json!({}), json!({ "widthPt": 0 }), json!({ "widthPt": "wide" }), json!({ "color": 42 })] {
+        let error = edit(
+            &mut deck,
+            &json!({ "operations": [{ "op": "element.setLine", "slideId": second, "elementId": text_element, "line": line }] }),
+        )
+        .expect_err("the line is refused");
+        assert_eq!(error.code, "session/argument-invalid");
+    }
+    let error = edit(&mut deck, &json!({ "operations": [{ "op": "element.setLine", "slideId": second, "elementId": text_element }] }))
+        .expect_err("a missing line is refused");
+    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(deck.revision(), revision, "failed lines consume no revision");
+}
+
+#[test]
+fn table_set_cell_rewrites_text_and_fill_and_composes() {
+    let (mut deck, _first, second) = replace_deck();
+    let element =
+        slide_detail(&deck, &second).expect("slide exists")["elements"][1]["id"].as_str().expect("table id").to_string();
+    let revision = deck.revision();
+    let report = edit(
+        &mut deck,
+        &json!({ "operations": [
+            { "op": "table.setCell", "slideId": second, "elementId": element, "row": 0, "column": 1, "text": "Q4 actual", "fill": "#FFFF00" },
+            { "op": "table.setCell", "slideId": second, "elementId": element, "row": 1, "column": 0, "text": "Margin" },
+        ] }),
+    )
+    .expect("cell edits commit");
+    assert_eq!(report["revision"], revision + 1, "one script bumps one revision");
+
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let cells = &detail["elements"][1]["content"]["rows"];
+    assert_eq!(cells[0]["cells"][1]["text"], json!("Q4 actual"), "the first cell's text changed");
+    assert_eq!(cells[0]["cells"][1]["fill"], json!("#FFFF00"), "the first cell's fill changed");
+    assert_eq!(cells[1]["cells"][0]["text"], json!("Margin"), "the queued second edit composes with the first");
+    assert_eq!(cells[1]["cells"][1]["text"], json!("flat"), "untouched cells stay");
+
+    edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "table.setCell", "slideId": second, "elementId": element, "row": 0, "column": 1, "fill": null }] }),
+    )
+    .expect("clearing the fill commits");
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    assert!(
+        detail["elements"][1]["content"]["rows"][0]["cells"][1]["fill"].is_null(),
+        "the cleared cell keeps no fill"
+    );
+}
+
+#[test]
+fn table_set_cell_refuses_non_tables_and_bad_coordinates() {
+    let (mut deck, _first, second) = replace_deck();
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let text_element = detail["elements"][0]["id"].as_str().expect("element id").to_string();
+    let table = detail["elements"][1]["id"].as_str().expect("table id").to_string();
+    let revision = deck.revision();
+    let error =
+        edit(&mut deck, &json!({ "operations": [{ "op": "table.setCell", "slideId": second, "elementId": text_element, "row": 0, "column": 0, "text": "x" }] }))
+            .expect_err("text is not a table");
+    assert_eq!(error.code, "object/type-mismatch");
+    for operation in [
+        json!({ "op": "table.setCell", "slideId": second, "elementId": table, "row": 2, "column": 0, "text": "x" }),
+        json!({ "op": "table.setCell", "slideId": second, "elementId": table, "row": 0, "column": 2, "text": "x" }),
+        json!({ "op": "table.setCell", "slideId": second, "elementId": table, "row": 0, "column": 0 }),
+        json!({ "op": "table.setCell", "slideId": second, "elementId": table, "row": 0, "column": 0, "fill": 7 }),
+        json!({ "op": "table.setCell", "slideId": second, "elementId": table, "row": -1, "column": 0, "text": "x" }),
+    ] {
+        let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("the cell request is refused");
+        assert_eq!(error.code, "session/argument-invalid");
+    }
+    assert_eq!(deck.revision(), revision, "failed cell edits consume no revision");
+}
+
+#[test]
 fn element_set_fill_repaints_and_clears_a_shape() {
     let (mut deck, slide, first, _second) = two_shapes();
     let revision = deck.revision();

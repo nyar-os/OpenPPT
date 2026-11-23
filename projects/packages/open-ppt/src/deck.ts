@@ -1095,6 +1095,9 @@ function patchOperations(slideId: SlideId, elementId: ElementId, patch: ElementP
     if (patch.fill !== undefined) {
         operations.push({ op: 'element.setFill', slideId, elementId, fill: patch.fill });
     }
+    if (patch.line !== undefined) {
+        operations.push({ op: 'element.setLine', slideId, elementId, line: patch.line });
+    }
     return operations;
 }
 

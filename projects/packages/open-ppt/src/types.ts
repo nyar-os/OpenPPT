@@ -329,6 +329,8 @@ export interface ElementPatch {
     readonly style?: TextStyle;
     /** Solid fill for a shape element; `null` clears the fill. */
     readonly fill?: string | null;
+    /** Stroke for a shape element; `null` clears the line. */
+    readonly line?: { readonly color?: string; readonly widthPt?: number } | null;
     readonly data?: ChartData;
     readonly expectedRevision?: number;
 }
