@@ -57,6 +57,7 @@ enum Deferred {
     SetLine { slide: SlideId, element: ElementId, line: Option<Line> },
     SetColumnWidths { slide: SlideId, element: ElementId, widths: Vec<i64> },
     SetRowHeights { slide: SlideId, element: ElementId, heights: Vec<i64> },
+    SetTitle { title: Option<String> },
 }
 
 /// Applies deferred edits to the committed document and rebuilds the deck.
@@ -108,6 +109,7 @@ fn apply_deferred(deck: &mut Deck, deferred: Vec<Deferred>) -> Result<(), Servic
                     table.rows = rows;
                 }
             }
+            Deferred::SetTitle { title } => document.title = title,
             Deferred::RemoveAsset { asset } => document.assets.retain(|candidate| candidate.id != asset),
             Deferred::SetLayout { slide, layout } => {
                 if let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide) {
@@ -361,6 +363,21 @@ impl EditState {
         let name = operation.get("op").and_then(Value::as_str).ok_or_else(|| invalid("every operation needs an `op` name"))?;
         let created = match name {
             "deck.replaceText" => Some(self.replace_text(draft, operation)?),
+            "deck.setTitle" => {
+                let title = match operation.get("title") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(text)) => {
+                        let trimmed = text.trim();
+                        if trimmed.is_empty() {
+                            return Err(invalid("`deck.setTitle` needs a non-empty `title`, or null to clear it"));
+                        }
+                        Some(trimmed.to_owned())
+                    }
+                    Some(_) => return Err(invalid("`title` must be a string or null")),
+                };
+                self.deferred.push(Deferred::SetTitle { title });
+                None
+            }
             "slide.add" => Some(self.add_slide(draft, operation)?),
             "slide.remove" => {
                 draft.remove_slide(&self.slide(operation)?)?;

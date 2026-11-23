@@ -5,6 +5,7 @@ use document_presentation::authored::{
     ShapeElementInput, SlideAddOptions, TableCell, TableElementInput, TableRow, TextContent, TextElementInput, Transform,
 };
 use open_ppt_deck::edit::{edit, slide_detail};
+use open_ppt_deck::summary;
 use serde_json::{Value, json};
 
 fn two_shapes() -> (Deck, String, String, String) {
@@ -1108,6 +1109,30 @@ fn element_hyperlink_stamps_and_clears_every_run() {
     )
     .expect_err("a shape has no text runs");
     assert_eq!(error.code, "session/argument-invalid");
+}
+
+#[test]
+fn deck_title_sets_trims_and_clears() {
+    let (mut deck, _slide) = background_deck();
+    let revision = deck.revision();
+
+    let report = edit(&mut deck, &json!({ "operations": [{ "op": "deck.setTitle", "title": "  Q3 Review  " }] }))
+        .expect("title commits");
+    assert_eq!(report["results"][0], Value::Null);
+    assert_eq!(report["revision"], revision + 1);
+    assert_eq!(summary(&deck)["title"], json!("Q3 Review"), "the title is trimmed");
+
+    edit(&mut deck, &json!({ "operations": [{ "op": "deck.setTitle", "title": null }] })).expect("title clears");
+    assert_eq!(summary(&deck)["title"], Value::Null);
+
+    for operation in [
+        json!({ "op": "deck.setTitle", "title": "   " }),
+        json!({ "op": "deck.setTitle", "title": 3 }),
+    ] {
+        let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("bad title");
+        assert_eq!(error.code, "session/argument-invalid");
+    }
+    assert_eq!(deck.revision(), revision + 2, "failed titles consume no revision");
 }
 
 #[test]
