@@ -51,6 +51,7 @@ enum Deferred {
     MoveSlide { slide: SlideId, index: usize },
     Background { slide: SlideId, fill: Option<Fill> },
     TableRows { slide: SlideId, element: ElementId, rows: Vec<TableRow> },
+    RemoveAsset { asset: AssetId },
 }
 
 /// Applies deferred edits to the committed document and rebuilds the deck.
@@ -102,6 +103,7 @@ fn apply_deferred(deck: &mut Deck, deferred: Vec<Deferred>) -> Result<(), Servic
                     table.rows = rows;
                 }
             }
+            Deferred::RemoveAsset { asset } => document.assets.retain(|candidate| candidate.id != asset),
         }
     }
     *deck = Deck::from_document(document).map_err(ServiceError::from)?;
@@ -530,6 +532,10 @@ impl EditState {
                 None
             }
             "asset.add" => Some(self.add_asset(draft, operation)?),
+            "asset.remove" => {
+                self.remove_asset(draft, operation)?;
+                None
+            }
             other => return Err(DeckError::new(codes::OBJECT_UNSUPPORTED, format!("operation `{other}` is not editable yet"))),
         };
         if let Some(id) = &created
@@ -621,6 +627,37 @@ impl EditState {
         let bytes = decode_bytes(operation.get("base64"))?;
         let asset = draft.add_asset(name, media_type, bytes, optional_string(operation, "license")?)?;
         Ok(asset.as_str().to_string())
+    }
+
+    /// Drops an embedded asset that no element references any more.
+    ///
+    /// The draft checks existence and usage; the removal itself joins the
+    /// deferred list because the upstream editor has no asset setter.
+    fn remove_asset(&mut self, draft: &mut DeckEdit, operation: &Value) -> Result<(), DeckError> {
+        let value = self.resolve_value(required_str(operation, "assetId")?)?;
+        let asset = AssetId::new(value).ok_or_else(|| invalid("asset identity must not be empty"))?;
+        let document = draft.document();
+        if !document.assets.iter().any(|candidate| candidate.id == asset) {
+            return Err(DeckError::new(codes::OBJECT_NOT_FOUND, format!("asset `{asset}` does not exist")));
+        }
+        let users = document
+            .slides
+            .iter()
+            .flat_map(|model| model.elements.iter())
+            .filter(|element| match &element.content {
+                ElementContent::Image(image) => image.asset == asset,
+                ElementContent::Media(media) => media.asset == asset,
+                _ => false,
+            })
+            .count();
+        if users > 0 {
+            return Err(DeckError::new(
+                codes::OBJECT_UNSUPPORTED,
+                format!("asset `{asset}` is still used by {users} element(s); remove them first"),
+            ));
+        }
+        self.deferred.push(Deferred::RemoveAsset { asset });
+        Ok(())
     }
 
     /// Rebuilds the source content as a new element at the end of the slide.

@@ -1217,3 +1217,59 @@ fn deck_replace_text_rejects_bad_arguments() {
 
     assert_eq!(deck.revision(), revision, "failed replacements consume no revision");
 }
+
+fn asset_deck() -> (Deck, String, String) {
+    let mut deck = Deck::create(DeckCreateOptions::default());
+    let report = edit(
+        &mut deck,
+        &json!({
+            "operations": [
+                { "op": "slide.add", "as": "$tx:first" },
+                { "op": "asset.add", "as": "$tx:used", "name": "logo.png", "mediaType": "image/png", "base64": "aGVsbG8=" },
+                { "op": "asset.add", "as": "$tx:free", "name": "spare.png", "mediaType": "image/png", "base64": "d29ybGQ=" },
+                { "op": "image.add", "slideId": "$tx:first", "assetId": "$tx:used", "alt": "Logo" },
+            ],
+        }),
+    )
+    .expect("asset deck builds");
+    let used = report["resolved"]["$tx:used"].as_str().expect("used asset id").to_string();
+    let free = report["resolved"]["$tx:free"].as_str().expect("free asset id").to_string();
+    (deck, used, free)
+}
+
+fn asset_ids(deck: &Deck) -> Vec<String> {
+    deck.document().assets.iter().map(|asset| asset.id.as_str().to_string()).collect()
+}
+
+#[test]
+fn asset_remove_drops_an_unused_asset() {
+    let (mut deck, used, free) = asset_deck();
+    let revision = deck.revision();
+    let report = edit(&mut deck, &json!({ "operations": [{ "op": "asset.remove", "assetId": free }] }))
+        .expect("removing an unused asset applies");
+    assert!(report["results"][0].is_null(), "removal creates no object");
+    assert_eq!(report["revision"], revision + 1, "one script bumps one revision");
+    let ids = asset_ids(&deck);
+    assert_eq!(ids.len(), 1, "the spare asset is gone");
+    assert_eq!(ids[0], used, "the referenced asset stays");
+}
+
+#[test]
+fn asset_remove_refuses_referenced_and_unknown_assets() {
+    let (mut deck, used, _free) = asset_deck();
+    let revision = deck.revision();
+
+    let error = edit(&mut deck, &json!({ "operations": [{ "op": "asset.remove", "assetId": used }] }))
+        .expect_err("a referenced asset is refused");
+    assert_eq!(error.code, "object/unsupported");
+
+    let error = edit(&mut deck, &json!({ "operations": [{ "op": "asset.remove", "assetId": "asset-missing" }] }))
+        .expect_err("an unknown asset is refused");
+    assert_eq!(error.code, "object/not-found");
+
+    let error = edit(&mut deck, &json!({ "operations": [{ "op": "asset.remove" }] })).expect_err("a missing id is refused");
+    assert_eq!(error.code, "session/argument-invalid");
+
+    assert_eq!(deck.revision(), revision, "failed removals consume no revision");
+    assert_eq!(asset_ids(&deck).len(), 2, "both assets survive the failed removals");
+}

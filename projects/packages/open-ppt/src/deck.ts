@@ -169,10 +169,8 @@ export class Deck {
                     ...(asset.license === null ? {} : { license: asset.license }),
                 };
             },
-            remove: async () => {
-                throw new OpenPPTError('object/unsupported', 'the engine cannot remove an embedded asset yet', {
-                    details: { feature: 'assets.remove' },
-                });
+            remove: async (assetId: AssetId) => {
+                this.apply([{ op: 'asset.remove', assetId }]);
             },
         };
         this.playback = { create: () => unsupported('playback.create') };
