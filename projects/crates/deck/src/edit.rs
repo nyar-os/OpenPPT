@@ -889,6 +889,49 @@ impl EditState {
                 self.queue_table_rows(slide, element, rows);
                 None
             }
+            "table.moveColumn" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let from = required_usize(operation, "column")?;
+                let to = required_usize(operation, "index")?;
+                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
+                let target = model.element(&element).ok_or_else(|| {
+                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
+                        .with_slide(slide.clone())
+                        .with_element(element.clone())
+                })?;
+                let ElementContent::Table(table) = &target.content
+                else {
+                    return Err(DeckError::new(
+                        codes::OBJECT_TYPE_MISMATCH,
+                        format!("element `{element}` is not a table; only tables carry columns"),
+                    )
+                    .with_slide(slide.clone())
+                    .with_element(element.clone()));
+                };
+                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
+                let mut widths =
+                    Self::queued_widths(&self.deferred, &slide, &element).unwrap_or_else(|| table.column_widths_emu.clone());
+                let columns = widths.len();
+                if from >= columns {
+                    return Err(invalid(format!("`column` {from} is outside the table's {columns} columns")));
+                }
+                if to >= columns {
+                    return Err(invalid(format!("`index` {to} is outside the table's {columns} columns")));
+                }
+                if rows.iter().any(|row| row.cells.iter().any(|cell| cell.column_span > 1)) {
+                    return Err(invalid("column moves need a table without horizontal merges"));
+                }
+                for row in &mut rows {
+                    let cell = row.cells.remove(from);
+                    row.cells.insert(to, cell);
+                }
+                let width = widths.remove(from);
+                widths.insert(to, width);
+                self.queue_table_rows(slide.clone(), element.clone(), rows);
+                self.deferred.push(Deferred::SetColumnWidths { slide, element, widths });
+                None
+            }
             "table.insertColumn" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;

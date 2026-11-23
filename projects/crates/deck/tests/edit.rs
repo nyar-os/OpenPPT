@@ -1,8 +1,8 @@
 //! Integration tests for the deck editing surface.
 
 use document_presentation::authored::{
-    ChartData, ChartElementInput, ChartSeries, ChartType, Deck, DeckCreateOptions, Fill, ImageElementInput, Line,
-    ShapeElementInput, SlideAddOptions, TableCell, TableElementInput, TableRow, TextContent, TextElementInput, Transform,
+    ChartData, ChartElementInput, ChartSeries, ChartType, Deck, DeckCreateOptions, ElementContent, Fill, ImageElementInput,
+    Line, ShapeElementInput, SlideAddOptions, TableCell, TableElementInput, TableRow, TextContent, TextElementInput, Transform,
 };
 use open_ppt_deck::edit::{edit, slide_detail};
 use open_ppt_deck::summary;
@@ -1837,6 +1837,141 @@ fn table_rows_insert_and_delete_with_heights_and_guards() {
         edit(&mut errors, &json!({ "operations": [operation] })).expect_err("invalid row edit");
     }
     assert_eq!(errors.revision(), before, "failed requests leave the revision untouched");
+}
+
+#[test]
+fn table_move_column_moves_cells_and_widths() {
+    let (mut deck, _first, second) = replace_deck();
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let table = detail["elements"][1]["id"].as_str().expect("table id").to_owned();
+    let text_element = detail["elements"][0]["id"].as_str().expect("text id").to_owned();
+
+    edit(
+        &mut deck,
+        &json!({ "operations": [{
+            "op": "table.insertColumn",
+            "slideId": second,
+            "elementId": table,
+            "column": 2,
+            "cells": ["Note", "More"],
+            "widthPt": 50,
+        }] }),
+    )
+    .expect("append a third column");
+
+    edit(&mut deck, &json!({ "operations": [{ "op": "table.moveColumn", "slideId": second, "elementId": table, "column": 0, "index": 2 }] }))
+        .expect("move the first column last");
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    assert_eq!(detail["elements"][1]["content"]["columnWidthsPt"], json!([100.0, 50.0, 100.0]));
+    let rows = detail["elements"][1]["content"]["rows"].as_array().expect("rows");
+    assert_eq!(rows[0]["cells"][0]["text"], json!("Q4 revenue plan"));
+    assert_eq!(rows[0]["cells"][1]["text"], json!("Note"));
+    assert_eq!(rows[0]["cells"][2]["text"], json!("Revenue"));
+    assert_eq!(rows[1]["cells"][0]["text"], json!("flat"));
+    assert_eq!(rows[1]["cells"][1]["text"], json!("More"));
+    assert_eq!(rows[1]["cells"][2]["text"], json!("Cost"));
+
+    edit(&mut deck, &json!({ "operations": [{ "op": "table.moveColumn", "slideId": second, "elementId": table, "column": 2, "index": 1 }] }))
+        .expect("move the last column to the middle");
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    assert_eq!(detail["elements"][1]["content"]["columnWidthsPt"], json!([100.0, 100.0, 50.0]));
+    let rows = detail["elements"][1]["content"]["rows"].as_array().expect("rows");
+    assert_eq!(rows[0]["cells"][0]["text"], json!("Q4 revenue plan"));
+    assert_eq!(rows[0]["cells"][1]["text"], json!("Revenue"));
+    assert_eq!(rows[0]["cells"][2]["text"], json!("Note"));
+    assert_eq!(rows[1]["cells"][0]["text"], json!("flat"));
+    assert_eq!(rows[1]["cells"][1]["text"], json!("Cost"));
+    assert_eq!(rows[1]["cells"][2]["text"], json!("More"));
+
+    let before = slide_detail(&deck, &second).expect("slide exists");
+    let revision = deck.revision();
+    let report = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "table.moveColumn", "slideId": second, "elementId": table, "column": 1, "index": 1 }] }),
+    )
+    .expect("a same-index move is a no-op");
+    assert_eq!(report["revision"], revision + 1, "a no-op still commits its batch");
+    assert_eq!(slide_detail(&deck, &second).expect("slide exists"), before, "the table is unchanged");
+
+    let revision = deck.revision();
+    for operation in [
+        json!({ "op": "table.moveColumn", "slideId": second, "elementId": table, "column": 9, "index": 0 }),
+        json!({ "op": "table.moveColumn", "slideId": second, "elementId": table, "column": 0, "index": 9 }),
+        json!({ "op": "table.moveColumn", "slideId": second, "elementId": text_element, "column": 0, "index": 0 }),
+    ] {
+        edit(&mut deck, &json!({ "operations": [operation] })).expect_err("invalid column move");
+    }
+    assert_eq!(deck.revision(), revision, "failed requests leave the revision untouched");
+}
+
+/// Builds one table whose first row starts with a cell spanning two columns.
+fn horizontally_merged_deck() -> (Deck, String, String) {
+    let mut deck = Deck::create(DeckCreateOptions::default());
+    let mut table = String::new();
+    let slide = deck
+        .transaction(None, |edit| {
+            let slide = edit.add_slide(SlideAddOptions { layout: None, index: None })?;
+            table = edit
+                .add_table(
+                    &slide,
+                    TableElementInput {
+                        column_widths_emu: vec![1_270_000, 1_270_000, 1_270_000],
+                        rows: vec![
+                            TableRow {
+                                height_emu: 508_000,
+                                cells: vec![TableCell::plain("A"), TableCell::plain("B"), TableCell::plain("C")],
+                            },
+                            TableRow {
+                                height_emu: 508_000,
+                                cells: vec![TableCell::plain("1"), TableCell::plain("2"), TableCell::plain("3")],
+                            },
+                        ],
+                        transform: Some(Transform::from_points(30.0, 160.0, 300.0, 60.0).unwrap()),
+                        alt: Some("merged grid".to_string()),
+                    },
+                )?
+                .as_str()
+                .to_string();
+            Ok(slide)
+        })
+        .expect("merged fixture builds");
+
+    let mut document = deck.document().clone();
+    let ElementContent::Table(table_content) = &mut document.slides[0].elements[0].content
+    else {
+        panic!("the fixture element is a table");
+    };
+    table_content.rows[0].cells.remove(1);
+    table_content.rows[0].cells[0].column_span = 2;
+    let deck = Deck::from_document(document).expect("the merged table validates");
+    (deck, slide.as_str().to_string(), table)
+}
+
+#[test]
+fn table_move_column_refuses_tables_with_horizontal_merges() {
+    let (mut deck, slide, table) = horizontally_merged_deck();
+    let detail = slide_detail(&deck, &slide).expect("slide exists");
+    assert_eq!(
+        detail["elements"][0]["content"]["rows"][0]["cells"].as_array().expect("cells").len(),
+        2,
+        "the fixture merges the first two cells of row 0"
+    );
+
+    let revision = deck.revision();
+    let error = edit(
+        &mut deck,
+        &json!({ "operations": [{
+            "op": "table.moveColumn",
+            "slideId": slide,
+            "elementId": table,
+            "column": 0,
+            "index": 1,
+        }] }),
+    )
+    .expect_err("a horizontal merge blocks column moves");
+    assert_eq!(error.code, "session/argument-invalid");
+    assert!(error.message.contains("horizontal merge"), "{}", error.message);
+    assert_eq!(deck.revision(), revision, "a refused move leaves the revision untouched");
 }
 
 #[test]

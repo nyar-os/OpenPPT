@@ -388,12 +388,31 @@ export interface ElementDistributeOperation {
     readonly axis: DistributeAxis;
 }
 
-/** Placement and stacking operations addressed to elements of one slide. */
+/**
+ * Edit operation that moves one table column to a zero-based column index.
+ *
+ * Both `column` and `index` are zero-based and must be smaller than the current
+ * column count; moving a column to its own index is a no-op. The cells of every
+ * row and the column width move together. A table with any horizontal merge
+ * answers with `session/argument-invalid` so spans cannot break, a non-table
+ * element with `object/type-mismatch`, and an unknown slide or element with
+ * `object/not-found`.
+ */
+export interface TableMoveColumnOperation {
+    readonly op: 'table.moveColumn';
+    readonly slideId: SlideId;
+    readonly elementId: ElementId;
+    readonly column: number;
+    readonly index: number;
+}
+
+/** Placement, stacking and table operations addressed to elements of one slide. */
 export type ElementOperation =
     | ElementReorderOperation
     | ElementDuplicateOperation
     | ElementAlignOperation
-    | ElementDistributeOperation;
+    | ElementDistributeOperation
+    | TableMoveColumnOperation;
 
 /**
  * Edit operation that rebuilds one element as a new element at the end of the
