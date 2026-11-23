@@ -1583,6 +1583,7 @@ fn table_cell_style_stamps_every_run_of_one_cell() {
             "italic": true,
             "sizePt": 18,
             "color": "#112233",
+            "align": "center",
         }] }),
     )
     .expect("cell style applies");
@@ -1596,17 +1597,20 @@ fn table_cell_style_stamps_every_run_of_one_cell() {
     assert_eq!(cell["style"]["italic"], json!(true));
     assert_eq!(cell["style"]["sizePt"], json!(18.0));
     assert_eq!(cell["style"]["color"], json!("#112233"));
+    assert_eq!(cell["style"]["align"], json!("center"));
     assert_eq!(
         detail["elements"][1]["content"]["rows"][0]["cells"][0]["style"]["bold"],
         Value::Null,
         "the neighbouring cell keeps its own styling"
     );
+    assert_eq!(detail["elements"][1]["content"]["rows"][0]["cells"][0]["style"]["align"], Value::Null);
 
     let before = deck.revision();
     for operation in [
         json!({ "op": "table.setCellStyle", "slideId": second, "elementId": table, "row": 9, "column": 0, "bold": true }),
         json!({ "op": "table.setCellStyle", "slideId": second, "elementId": table, "row": 0, "column": 9, "bold": true }),
         json!({ "op": "table.setCellStyle", "slideId": second, "elementId": table, "row": 0, "column": 0 }),
+        json!({ "op": "table.setCellStyle", "slideId": second, "elementId": table, "row": 0, "column": 0, "align": "middle" }),
         json!({ "op": "table.setCellStyle", "slideId": second, "elementId": "shape-999", "row": 0, "column": 0, "bold": true }),
         json!({ "op": "table.setCellStyle", "slideId": second, "elementId": text_element, "row": 0, "column": 0, "bold": true }),
     ] {

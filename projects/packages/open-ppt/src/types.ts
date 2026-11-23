@@ -319,6 +319,8 @@ export interface TextStyle {
     /** Text colour as `#RGB` or `#RRGGBB`. */
     readonly color?: string;
     readonly fontFamily?: string;
+    /** Paragraph alignment applied to every paragraph touched by the style. */
+    readonly align?: 'left' | 'center' | 'right' | 'justify';
 }
 
 /** Partial element update addressed by ID. */

@@ -12,7 +12,7 @@ use crate::base64_text;
 use document_presentation::authored::{
     AssetId, ChartData, ChartElementInput, Deck, DeckEdit, DeckError, EMU_PER_POINT, Element, ElementContent, ElementId, Fill,
     FormulaElementInput, ImageElementInput, LayoutId, Line, LockFlags, MediaKind, ShapeElementInput, SlideAddOptions, SlideId,
-    TableCell, TableElementInput, TableRow, TextContent, TextElementInput, Transform, codes,
+    TableCell, TableElementInput, TableRow, TextAlign, TextContent, TextElementInput, Transform, codes,
 };
 use serde_json::{Value, json};
 
@@ -284,7 +284,8 @@ fn element_content(element: &Element) -> Value {
 
 /// First-run styling of one rich-text body, used for table cells.
 fn first_run_style(text: &TextContent) -> Value {
-    let run = text.paragraphs.first().and_then(|paragraph| paragraph.runs.first());
+    let paragraph = text.paragraphs.first();
+    let run = paragraph.and_then(|paragraph| paragraph.runs.first());
     json!({
         "fontFamily": run.and_then(|run| run.font_family.clone()),
         "sizePt": run.and_then(|run| run.size_pt),
@@ -293,6 +294,7 @@ fn first_run_style(text: &TextContent) -> Value {
         "underline": run.and_then(|run| run.underline),
         "strike": run.and_then(|run| run.strike),
         "color": run.and_then(|run| run.color.clone()),
+        "align": paragraph.and_then(|paragraph| paragraph.align),
     })
 }
 
@@ -1377,6 +1379,19 @@ fn optional_string(operation: &Value, key: &str) -> Result<Option<String>, DeckE
     }
 }
 
+/// Parses the paragraph alignment shared by style operations.
+fn optional_text_align(operation: &Value) -> Result<Option<TextAlign>, DeckError> {
+    optional_string(operation, "align")?
+        .map(|value| match value.as_str() {
+            "left" => Ok(TextAlign::Left),
+            "center" => Ok(TextAlign::Center),
+            "right" => Ok(TextAlign::Right),
+            "justify" => Ok(TextAlign::Justify),
+            other => Err(invalid(format!("`align` must be `left`, `center`, `right` or `justify`, not `{other}`"))),
+        })
+        .transpose()
+}
+
 fn optional_string_array(operation: &Value, key: &str) -> Result<Option<Vec<String>>, DeckError> {
     match operation.get(key) {
         None | Some(Value::Null) => Ok(None),
@@ -1595,6 +1610,7 @@ struct TextStyle {
     size_pt: Option<f64>,
     color: Option<String>,
     font_family: Option<String>,
+    align: Option<TextAlign>,
 }
 
 impl TextStyle {
@@ -1607,6 +1623,7 @@ impl TextStyle {
             size_pt: optional_font_size(operation)?,
             color: optional_hex_color(operation)?,
             font_family: optional_string(operation, "fontFamily")?.filter(|family| !family.trim().is_empty()),
+            align: optional_text_align(operation)?,
         };
         if style.bold.is_none()
             && style.italic.is_none()
@@ -1615,6 +1632,7 @@ impl TextStyle {
             && style.size_pt.is_none()
             && style.color.is_none()
             && style.font_family.is_none()
+            && style.align.is_none()
         {
             return Err(invalid(format!("`{operation_name}` needs at least one style property")));
         }
@@ -1643,6 +1661,9 @@ impl TextStyle {
     /// Stamps every set property onto every run of `text`.
     fn apply(&self, text: &mut TextContent) {
         for paragraph in &mut text.paragraphs {
+            if let Some(value) = self.align {
+                paragraph.align = Some(value);
+            }
             for run in &mut paragraph.runs {
                 if let Some(value) = self.bold {
                     run.bold = Some(value);
