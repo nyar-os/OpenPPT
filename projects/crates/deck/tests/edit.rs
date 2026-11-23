@@ -1065,6 +1065,52 @@ fn element_text_style_reaches_every_run() {
 }
 
 #[test]
+fn element_hyperlink_stamps_and_clears_every_run() {
+    let (mut deck, slide) = background_deck();
+    let element = element_ids(&deck, &slide)[0].clone();
+    let revision = deck.revision();
+
+    edit(
+        &mut deck,
+        &json!({ "operations": [{
+            "op": "element.setHyperlink",
+            "slideId": slide,
+            "elementId": element,
+            "url": " https://example.com/report ",
+        }] }),
+    )
+    .expect("hyperlink commits");
+    let detail = slide_detail(&deck, &slide).expect("slide detail");
+    assert_eq!(element_entry(&detail, &element)["style"]["hyperlink"], json!("https://example.com/report"));
+
+    edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "element.setHyperlink", "slideId": slide, "elementId": element, "url": null }] }),
+    )
+    .expect("hyperlink clears");
+    let detail = slide_detail(&deck, &slide).expect("slide detail");
+    assert_eq!(element_entry(&detail, &element)["style"]["hyperlink"], Value::Null);
+
+    for operation in [
+        json!({ "op": "element.setHyperlink", "slideId": slide, "elementId": element }),
+        json!({ "op": "element.setHyperlink", "slideId": slide, "elementId": element, "url": "   " }),
+        json!({ "op": "element.setHyperlink", "slideId": slide, "elementId": "element-missing", "url": "https://x.test" }),
+    ] {
+        let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("invalid hyperlink");
+        assert!(error.code == "session/argument-invalid" || error.code == "object/not-found");
+    }
+    assert_eq!(deck.revision(), revision + 2, "failed hyperlinks consume no revision");
+
+    let (mut shapes, shape_slide, shape, _) = two_shapes();
+    let error = edit(
+        &mut shapes,
+        &json!({ "operations": [{ "op": "element.setHyperlink", "slideId": shape_slide, "elementId": shape, "url": "https://x.test" }] }),
+    )
+    .expect_err("a shape has no text runs");
+    assert_eq!(error.code, "session/argument-invalid");
+}
+
+#[test]
 fn a_failing_duplicate_rolls_back_the_whole_batch() {
     let (mut deck, slide, sources) = duplicate_deck();
     let revision = deck.revision();

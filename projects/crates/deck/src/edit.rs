@@ -295,6 +295,7 @@ fn first_run_style(text: &TextContent) -> Value {
         "strike": run.and_then(|run| run.strike),
         "color": run.and_then(|run| run.color.clone()),
         "align": paragraph.and_then(|paragraph| paragraph.align),
+        "hyperlink": run.and_then(|run| run.hyperlink.clone()),
     })
 }
 
@@ -313,6 +314,7 @@ fn element_style(element: &Element) -> Value {
         "italic": runs.and_then(|run| run.italic).unwrap_or(false),
         "color": runs.and_then(|run| run.color.clone()),
         "align": paragraphs.and_then(|text| text.paragraphs.first()).and_then(|paragraph| paragraph.align),
+        "hyperlink": runs.and_then(|run| run.hyperlink.clone()),
     })
 }
 
@@ -569,6 +571,19 @@ impl EditState {
                 let element = self.element(operation)?;
                 let style = TextStyle::parse(operation, "element.setTextStyle")?;
                 let content = styled_content(draft, &slide, &element, &style)?;
+                draft.set_element_text(&slide, &element, content)?;
+                None
+            }
+            "element.setHyperlink" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let link = match operation.get("url") {
+                    Some(Value::Null) => None,
+                    Some(Value::String(url)) if !url.trim().is_empty() => Some(url.trim().to_owned()),
+                    Some(Value::String(_)) => return Err(invalid("`url` must be a non-empty string or null")),
+                    _ => return Err(invalid("`element.setHyperlink` needs a `url` string or null")),
+                };
+                let content = hyperlink_content(draft, &slide, &element, link)?;
                 draft.set_element_text(&slide, &element, content)?;
                 None
             }
@@ -1654,6 +1669,26 @@ fn styled_content(draft: &DeckEdit, slide: &SlideId, element: &ElementId, style:
     };
     let mut text = text.clone();
     style.apply(&mut text);
+    Ok(text)
+}
+
+fn hyperlink_content(draft: &DeckEdit, slide: &SlideId, element: &ElementId, link: Option<String>) -> Result<TextContent, DeckError> {
+    let model = draft.document().slide(slide).ok_or_else(|| missing_slide(slide))?;
+    let target = model.element(element).ok_or_else(|| {
+        DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{}` does not exist on this slide", element.as_str()))
+            .with_slide(slide.clone())
+            .with_element(element.clone())
+    })?;
+    let ElementContent::Text(text) = &target.content
+    else {
+        return Err(invalid("`element.setHyperlink` needs a text element"));
+    };
+    let mut text = text.clone();
+    for paragraph in &mut text.paragraphs {
+        for run in &mut paragraph.runs {
+            run.hyperlink = link.clone();
+        }
+    }
     Ok(text)
 }
 
