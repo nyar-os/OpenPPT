@@ -854,6 +854,41 @@ impl EditState {
                 self.queue_table_rows(slide, element, rows);
                 None
             }
+            "table.moveRow" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let from = required_usize(operation, "row")?;
+                let to = required_usize(operation, "index")?;
+                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
+                let target = model.element(&element).ok_or_else(|| {
+                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
+                        .with_slide(slide.clone())
+                        .with_element(element.clone())
+                })?;
+                let ElementContent::Table(table) = &target.content
+                else {
+                    return Err(DeckError::new(
+                        codes::OBJECT_TYPE_MISMATCH,
+                        format!("element `{element}` is not a table; only tables carry rows"),
+                    )
+                    .with_slide(slide.clone())
+                    .with_element(element.clone()));
+                };
+                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
+                if from >= rows.len() {
+                    return Err(invalid(format!("`row` {from} is outside the table's {} rows", rows.len())));
+                }
+                if to >= rows.len() {
+                    return Err(invalid(format!("`index` {to} is outside the table's {} rows", rows.len())));
+                }
+                if rows.iter().any(|row| row.cells.iter().any(|cell| cell.row_span > 1)) {
+                    return Err(invalid("row moves need a table without vertical merges"));
+                }
+                let row = rows.remove(from);
+                rows.insert(to, row);
+                self.queue_table_rows(slide, element, rows);
+                None
+            }
             "table.insertColumn" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
