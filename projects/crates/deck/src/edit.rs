@@ -264,6 +264,7 @@ fn element_content(element: &Element) -> Value {
                         .map(|cell| json!({
                             "text": cell.text.text(),
                             "fill": cell.fill.as_ref().map(fill_value),
+                            "style": first_run_style(&cell.text),
                         }))
                         .collect::<Vec<_>>(),
                 }))
@@ -279,6 +280,20 @@ fn element_content(element: &Element) -> Value {
             },
         }),
     }
+}
+
+/// First-run styling of one rich-text body, used for table cells.
+fn first_run_style(text: &TextContent) -> Value {
+    let run = text.paragraphs.first().and_then(|paragraph| paragraph.runs.first());
+    json!({
+        "fontFamily": run.and_then(|run| run.font_family.clone()),
+        "sizePt": run.and_then(|run| run.size_pt),
+        "bold": run.and_then(|run| run.bold),
+        "italic": run.and_then(|run| run.italic),
+        "underline": run.and_then(|run| run.underline),
+        "strike": run.and_then(|run| run.strike),
+        "color": run.and_then(|run| run.color.clone()),
+    })
 }
 
 /// First-run text styling, so a canvas can draw text without rewriting the model.
@@ -550,7 +565,7 @@ impl EditState {
             "element.setTextStyle" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
-                let style = TextStyle::parse(operation)?;
+                let style = TextStyle::parse(operation, "element.setTextStyle")?;
                 let content = styled_content(draft, &slide, &element, &style)?;
                 draft.set_element_text(&slide, &element, content)?;
                 None
@@ -645,6 +660,39 @@ impl EditState {
                 if let Some(fill) = fill {
                     rows[row].cells[column].fill = fill;
                 }
+                self.queue_table_rows(slide, element, rows);
+                None
+            }
+            "table.setCellStyle" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let row = required_usize(operation, "row")?;
+                let column = required_usize(operation, "column")?;
+                let style = TextStyle::parse(operation, "table.setCellStyle")?;
+                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
+                let target = model.element(&element).ok_or_else(|| {
+                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
+                        .with_slide(slide.clone())
+                        .with_element(element.clone())
+                })?;
+                let ElementContent::Table(table) = &target.content
+                else {
+                    return Err(DeckError::new(
+                        codes::OBJECT_TYPE_MISMATCH,
+                        format!("element `{element}` is not a table; only tables carry cells"),
+                    )
+                    .with_slide(slide.clone())
+                    .with_element(element.clone()));
+                };
+                if row >= table.rows.len() {
+                    return Err(invalid(format!("`row` {row} is outside the table's {} rows", table.rows.len())));
+                }
+                let columns = table.rows[row].cells.len();
+                if column >= columns {
+                    return Err(invalid(format!("`column` {column} is outside row {row}'s {columns} cells")));
+                }
+                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
+                style.apply(&mut rows[row].cells[column].text);
                 self.queue_table_rows(slide, element, rows);
                 None
             }
@@ -1298,7 +1346,7 @@ struct TextStyle {
 }
 
 impl TextStyle {
-    fn parse(operation: &Value) -> Result<Self, DeckError> {
+    fn parse(operation: &Value, operation_name: &str) -> Result<Self, DeckError> {
         let style = Self {
             bold: optional_bool(operation, "bold")?,
             italic: optional_bool(operation, "italic")?,
@@ -1316,7 +1364,7 @@ impl TextStyle {
             && style.color.is_none()
             && style.font_family.is_none()
         {
-            return Err(invalid("`element.setTextStyle` needs at least one style property"));
+            return Err(invalid(format!("`{operation_name}` needs at least one style property")));
         }
         Ok(style)
     }
@@ -1335,32 +1383,39 @@ fn styled_content(draft: &DeckEdit, slide: &SlideId, element: &ElementId, style:
         return Err(invalid("`element.setTextStyle` needs a text element"));
     };
     let mut text = text.clone();
-    for paragraph in &mut text.paragraphs {
-        for run in &mut paragraph.runs {
-            if let Some(value) = style.bold {
-                run.bold = Some(value);
-            }
-            if let Some(value) = style.italic {
-                run.italic = Some(value);
-            }
-            if let Some(value) = style.underline {
-                run.underline = Some(value);
-            }
-            if let Some(value) = style.strike {
-                run.strike = Some(value);
-            }
-            if let Some(value) = style.size_pt {
-                run.size_pt = Some(value);
-            }
-            if let Some(value) = &style.color {
-                run.color = Some(value.clone());
-            }
-            if let Some(value) = &style.font_family {
-                run.font_family = Some(value.clone());
+    style.apply(&mut text);
+    Ok(text)
+}
+
+impl TextStyle {
+    /// Stamps every set property onto every run of `text`.
+    fn apply(&self, text: &mut TextContent) {
+        for paragraph in &mut text.paragraphs {
+            for run in &mut paragraph.runs {
+                if let Some(value) = self.bold {
+                    run.bold = Some(value);
+                }
+                if let Some(value) = self.italic {
+                    run.italic = Some(value);
+                }
+                if let Some(value) = self.underline {
+                    run.underline = Some(value);
+                }
+                if let Some(value) = self.strike {
+                    run.strike = Some(value);
+                }
+                if let Some(value) = self.size_pt {
+                    run.size_pt = Some(value);
+                }
+                if let Some(value) = &self.color {
+                    run.color = Some(value.clone());
+                }
+                if let Some(value) = &self.font_family {
+                    run.font_family = Some(value.clone());
+                }
             }
         }
     }
-    Ok(text)
 }
 
 fn optional_bool(operation: &Value, key: &str) -> Result<Option<bool>, DeckError> {

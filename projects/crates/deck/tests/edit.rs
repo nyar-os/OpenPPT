@@ -1562,3 +1562,56 @@ fn element_set_fill_refuses_non_shapes_and_bad_arguments() {
 
     assert_eq!(deck.revision(), revision, "failed fills consume no revision");
 }
+
+#[test]
+fn table_cell_style_stamps_every_run_of_one_cell() {
+    let (mut deck, _first, second) = replace_deck();
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let table = detail["elements"][1]["id"].as_str().expect("table id").to_owned();
+    let text_element = detail["elements"][0]["id"].as_str().expect("text id").to_owned();
+    let revision = deck.revision();
+
+    let report = edit(
+        &mut deck,
+        &json!({ "operations": [{
+            "op": "table.setCellStyle",
+            "slideId": second,
+            "elementId": table,
+            "row": 0,
+            "column": 1,
+            "bold": true,
+            "italic": true,
+            "sizePt": 18,
+            "color": "#112233",
+        }] }),
+    )
+    .expect("cell style applies");
+    assert_eq!(report["revision"], revision + 1);
+    assert_eq!(report["results"][0], Value::Null, "style edits have no payload");
+
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let cell = &detail["elements"][1]["content"]["rows"][0]["cells"][1];
+    assert_eq!(cell["text"], json!("Q4 revenue plan"));
+    assert_eq!(cell["style"]["bold"], json!(true));
+    assert_eq!(cell["style"]["italic"], json!(true));
+    assert_eq!(cell["style"]["sizePt"], json!(18.0));
+    assert_eq!(cell["style"]["color"], json!("#112233"));
+    assert_eq!(
+        detail["elements"][1]["content"]["rows"][0]["cells"][0]["style"]["bold"],
+        Value::Null,
+        "the neighbouring cell keeps its own styling"
+    );
+
+    let before = deck.revision();
+    for operation in [
+        json!({ "op": "table.setCellStyle", "slideId": second, "elementId": table, "row": 9, "column": 0, "bold": true }),
+        json!({ "op": "table.setCellStyle", "slideId": second, "elementId": table, "row": 0, "column": 9, "bold": true }),
+        json!({ "op": "table.setCellStyle", "slideId": second, "elementId": table, "row": 0, "column": 0 }),
+        json!({ "op": "table.setCellStyle", "slideId": second, "elementId": "shape-999", "row": 0, "column": 0, "bold": true }),
+        json!({ "op": "table.setCellStyle", "slideId": second, "elementId": text_element, "row": 0, "column": 0, "bold": true }),
+    ] {
+        edit(&mut deck, &json!({ "operations": [operation] })).expect_err("invalid cell style");
+    }
+    assert_eq!(deck.revision(), before, "failed requests leave the revision untouched");
+}
+
