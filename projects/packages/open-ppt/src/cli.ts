@@ -11,10 +11,11 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { createCli } from '@wae/commander';
+import { CliError, createCli } from '@wae/commander';
 import type { CommandContext } from '@wae/commander';
 
 import { OpenPPT } from './open-ppt.js';
+import { isOpenPPTError } from './errors.js';
 import { runGui } from './gui.js';
 import type {
     DeckOutline,
@@ -41,12 +42,26 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 const cli = createCli('open-ppt').locales(path.join(here, '..', 'locales')).intro('cli.intro');
 
-/** Runs `work` against one session and always releases its handles. */
-async function withSession<T>(work: (ppt: OpenPPT) => Promise<T>): Promise<T> {
-    const ppt = new OpenPPT();
+/**
+ * Runs `work` against one session and always releases its handles.
+ *
+ * The session locale follows the CLI `--locale`, so the SDK renders its error
+ * copy in the requested language. An `OpenPPTError` rethrows as a `CliError`
+ * carrying the same stable code, so `--json` consumers branch on the SDK
+ * contract instead of the framework's `commander::action_failed`.
+ */
+async function withSession<T>(ctx: CommandContext, work: (ppt: OpenPPT) => Promise<T>): Promise<T> {
+    const ppt = new OpenPPT({ locale: ctx.locale });
     try {
         return await work(ppt);
-    } finally {
+    }
+    catch (error) {
+        if (isOpenPPTError(error)) {
+            throw CliError.from(error, error.code);
+        }
+        throw error;
+    }
+    finally {
         await ppt.dispose();
     }
 }
@@ -274,7 +289,7 @@ function readRevision(raw: string | undefined, ctx: CommandContext): number | un
 }
 
 cli.command('capabilities', 'cli.cmd.capabilities').actionCtx(async (_options, _args, ctx) => {
-    const matrix = await withSession((ppt) => ppt.capabilities());
+    const matrix = await withSession(ctx, (ppt) => ppt.capabilities());
     ctx.emitResult(matrix, describeCapabilities(matrix));
     return 0;
 });
@@ -293,7 +308,7 @@ cli
             ctx.fail('open-ppt.cli.out-required', { message: '`--out <file>` is required' });
             return 2;
         }
-        await withSession(async (ppt) => {
+        await withSession(ctx, async (ppt) => {
             const deck = await ppt.create({
                 title: text(options, 'title'),
                 size: text(options, 'size') as DeckSize | undefined,
@@ -315,7 +330,7 @@ cli.command('open', 'cli.cmd.open').actionCtx(async (options, _args, ctx) => {
         ctx.fail('open-ppt.cli.file-required', { message: 'a project file is required' });
         return 2;
     }
-    await withSession(async (ppt) => {
+    await withSession(ctx, async (ppt) => {
         const deck = await ppt.open({ path: file });
         const summary = deck.summary();
         ctx.emitResult(summary, describeDeck(summary));
@@ -333,7 +348,7 @@ cli
             ctx.fail('open-ppt.cli.file-required', { message: 'a presentation file is required' });
             return 2;
         }
-        await withSession(async (ppt) => {
+        await withSession(ctx, async (ppt) => {
             const deck = await ppt.importPptx(file);
             const out = text(options, 'out');
             const saved = out === undefined ? undefined : await deck.save({ target: out, overwrite: flag(options, 'overwrite') });
@@ -367,7 +382,7 @@ cli
             .map((name) => name.trim())
             .filter((name) => name.length > 0) as InspectCheck[] | undefined;
         let passed = false;
-        await withSession(async (ppt) => {
+        await withSession(ctx, async (ppt) => {
             const report = await ppt.inspect({ path: file }, { checks });
             ctx.emitResult(report, describeReport(report));
             passed = report.passed;
@@ -386,7 +401,7 @@ cli
         }
         const out = text(options, 'out');
         if (isPresentationPath(file)) {
-            await withSession(async (ppt) => {
+            await withSession(ctx, async (ppt) => {
                 const reader = await ppt.readPptx(file);
                 if (out !== undefined) {
                     mkdirSync(out, { recursive: true });
@@ -405,7 +420,7 @@ cli
             });
             return 2;
         }
-        await withSession(async (ppt) => {
+        await withSession(ctx, async (ppt) => {
             const deck = await ppt.open({ path: file });
             const report = await deck.play();
             ctx.emitResult(report, report.frames.map(describeFrame).join('\n'));
@@ -435,7 +450,7 @@ cli
             return 2;
         }
         const out = text(options, 'out');
-        await withSession(async (ppt) => {
+        await withSession(ctx, async (ppt) => {
             const deck = await ppt.open({ path: file });
             const report = await deck.render({ format: 'svg', target: out, pages });
             const lines = [`render revision=${report.revision} format=svg pages=${report.pages.length}`];
@@ -479,7 +494,7 @@ cli
             }
             columns = value;
         }
-        await withSession(async (ppt) => {
+        await withSession(ctx, async (ppt) => {
             const deck = await ppt.open({ path: file });
             const sheet = await deck.contactSheet({ target: out, columns, pages });
             const lines = [
@@ -513,7 +528,7 @@ cli
         }
         const format: ExportFormat =
             requested === 'ppsx' ? 'ppsx' : requested === 'potx' ? 'potx' : requested === 'pdf' ? 'pdf' : 'pptx';
-        await withSession(async (ppt) => {
+        await withSession(ctx, async (ppt) => {
             const deck = await ppt.open({ path: file });
             const report = await deck.export({
                 format,
@@ -569,7 +584,7 @@ cli
         const request = readEditScript(raw, ctx);
         const flagRevision = readRevision(text(options, 'expected-revision'), ctx);
         const expectedRevision = flagRevision ?? request.expectedRevision;
-        await withSession(async (ppt) => {
+        await withSession(ctx, async (ppt) => {
             const deck = await ppt.open({ path: file });
             const report = await deck.edit(request.operations, { expectedRevision });
             const out = text(options, 'out');
@@ -593,7 +608,7 @@ cli.command('slide', 'cli.cmd.slide').actionCtx(async (options, _args, ctx) => {
         ctx.fail('open-ppt.cli.slide-required', { message: 'a slide id is required' });
         return 2;
     }
-    await withSession(async (ppt) => {
+    await withSession(ctx, async (ppt) => {
         const deck = await ppt.open({ path: file });
         const detail = await deck.slide(slideId);
         ctx.emitResult(detail, describeSlide(detail));
@@ -639,7 +654,7 @@ cli
             }
             maxPerSlide = value;
         }
-        await withSession(async (ppt) => {
+        await withSession(ctx, async (ppt) => {
             const deck = await ppt.open({ path: file });
             const slideIds = list(options, 'slide')
                 .flatMap((entry) => entry.split(','))
@@ -673,7 +688,7 @@ cli.command('outline', 'cli.cmd.outline').option('--points', 'cli.opt.outlinePoi
         ctx.fail('open-ppt.cli.file-required', { message: 'a project file is required' });
         return 2;
     }
-    await withSession(async (ppt) => {
+    await withSession(ctx, async (ppt) => {
         const deck = await ppt.open({ path: file });
         const outline = deck.outline({ points: flag(options, 'points') });
         ctx.emitResult(outline, describeOutline(outline));
@@ -687,7 +702,7 @@ cli.command('assets', 'cli.cmd.assets').actionCtx(async (options, _args, ctx) =>
         ctx.fail('open-ppt.cli.file-required', { message: 'a project file is required' });
         return 2;
     }
-    await withSession(async (ppt) => {
+    await withSession(ctx, async (ppt) => {
         const deck = await ppt.open({ path: file });
         const assets = await deck.assets.list();
         ctx.emitResult(assets, describeAssets(assets));
@@ -706,7 +721,7 @@ function historyCommand(name: 'undo' | 'redo'): void {
                 ctx.fail('open-ppt.cli.file-required', { message: 'a project file is required' });
                 return 2;
             }
-            await withSession(async (ppt) => {
+            await withSession(ctx, async (ppt) => {
                 const deck = await ppt.open({ path: file });
                 const changed = name === 'undo' ? await deck.undo() : await deck.redo();
                 const revision = deck.revision;
