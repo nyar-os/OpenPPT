@@ -111,6 +111,14 @@ await reopened.close();
 
 `body` and the second slide id are real values returned by the engine; never invent ids. Report `export().losses` instead of claiming a lossless conversion.
 
+The workflow above exists verbatim as
+[`projects/packages/open-ppt/examples/review-workflow.ts`](../projects/packages/open-ppt/examples/review-workflow.ts):
+it asserts the unsupported check reports without an address, repairs only the
+addressed findings, re-checks the committed revision, writes the SVG preview and
+contact sheet, reports the PPTX losses and reopens the native project to prove
+the repaired element keeps its id and transform. CI runs it against the real
+engine via `pnpm --filter @wae/open-ppt run example` after `build:test`.
+
 ## Edit script shape
 
 `edit` accepts either a bare operations array or a full request:

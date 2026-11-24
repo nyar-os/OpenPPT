@@ -43,6 +43,6 @@ jobs:
       - name: Compile the package sources
         run: pnpm --filter @wae/open-ppt run build:test
       - name: Run the review workflow example against the real engine
-        run: node projects/packages/open-ppt/dist-test/examples/review-workflow.js
+        run: pnpm --filter @wae/open-ppt run example
         env:
           OPEN_PPT_NATIVE: ${{ github.workspace }}/target/debug/open_ppt_napi.node
