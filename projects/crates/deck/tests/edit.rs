@@ -2218,3 +2218,95 @@ fn table_duplicate_refuses_merges_and_bad_arguments() {
     }
     assert_eq!(deck.revision(), revision, "failed requests leave the revision untouched");
 }
+
+#[test]
+fn table_transpose_mirrors_cells_and_swaps_geometry() {
+    let (mut deck, _first, second) = replace_deck();
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let table = detail["elements"][1]["id"].as_str().expect("table id").to_owned();
+    let revision = deck.revision();
+
+    let report = edit(&mut deck, &json!({ "operations": [{ "op": "table.transpose", "slideId": second, "elementId": table }] }))
+        .expect("transpose commits");
+    assert_eq!(report["revision"], revision + 1);
+    assert_eq!(report["results"][0], Value::Null, "a transpose reports no payload");
+
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let rows = detail["elements"][1]["content"]["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["cells"][0]["text"], json!("Revenue"));
+    assert_eq!(rows[0]["cells"][1]["text"], json!("Cost"));
+    assert_eq!(rows[1]["cells"][0]["text"], json!("Q4 revenue plan"));
+    assert_eq!(rows[1]["cells"][1]["text"], json!("flat"));
+    assert_eq!(detail["elements"][1]["content"]["columnWidthsPt"], json!([30.0, 30.0]), "row heights became widths");
+    assert_eq!(rows[0]["heightPt"], json!(100.0), "column widths became heights");
+    assert_eq!(rows[1]["heightPt"], json!(100.0));
+}
+
+#[test]
+fn table_transpose_handles_a_non_square_table_and_composes_with_cell_edits() {
+    let (mut deck, _first, second) = replace_deck();
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let table = detail["elements"][1]["id"].as_str().expect("table id").to_owned();
+
+    edit(
+        &mut deck,
+        &json!({ "operations": [{
+            "op": "table.insertColumn",
+            "slideId": second,
+            "elementId": table,
+            "column": 2,
+            "cells": ["Note", "More"],
+            "widthPt": 50,
+        }] }),
+    )
+    .expect("append a third column");
+
+    edit(
+        &mut deck,
+        &json!({ "operations": [
+            { "op": "table.setCell", "slideId": second, "elementId": table, "row": 0, "column": 0, "text": "Plan" },
+            { "op": "table.transpose", "slideId": second, "elementId": table },
+        ] }),
+    )
+    .expect("transpose after a queued cell edit");
+
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let rows = detail["elements"][1]["content"]["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 3, "two rows became three");
+    assert_eq!(rows[0]["cells"].as_array().expect("cells").len(), 2, "three columns became two");
+    assert_eq!(rows[0]["cells"][0]["text"], json!("Plan"), "the queued cell edit is transposed");
+    assert_eq!(rows[0]["cells"][1]["text"], json!("Cost"));
+    assert_eq!(rows[1]["cells"][0]["text"], json!("Q4 revenue plan"));
+    assert_eq!(rows[2]["cells"][0]["text"], json!("Note"));
+    assert_eq!(rows[2]["cells"][1]["text"], json!("More"));
+    assert_eq!(detail["elements"][1]["content"]["columnWidthsPt"], json!([30.0, 30.0]));
+    assert_eq!(rows[0]["heightPt"], json!(100.0));
+    assert_eq!(rows[2]["heightPt"], json!(50.0), "the appended column width became the last row height");
+}
+
+#[test]
+fn table_transpose_refuses_merges_non_tables_and_unknown_objects() {
+    let (mut deck, slide, table) = horizontally_merged_deck();
+    let revision = deck.revision();
+    let error = edit(&mut deck, &json!({ "operations": [{ "op": "table.transpose", "slideId": slide, "elementId": table }] }))
+        .expect_err("a merged cell blocks transposition");
+    assert_eq!(error.code, "session/argument-invalid");
+    assert!(error.message.contains("merged cells"), "{}", error.message);
+    assert_eq!(deck.revision(), revision, "a refused transpose leaves the revision untouched");
+
+    let (mut deck, _first, second) = replace_deck();
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let table = detail["elements"][1]["id"].as_str().expect("table id").to_owned();
+    let text_element = detail["elements"][0]["id"].as_str().expect("text id").to_owned();
+    let revision = deck.revision();
+    for (operation, code) in [
+        (json!({ "op": "table.transpose", "slideId": second, "elementId": text_element }), "object/type-mismatch"),
+        (json!({ "op": "table.transpose", "slideId": "slide-missing", "elementId": table }), "object/not-found"),
+        (json!({ "op": "table.transpose", "slideId": second, "elementId": "element-missing" }), "object/not-found"),
+    ] {
+        let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("invalid transpose");
+        assert_eq!(error.code, code);
+    }
+    assert_eq!(deck.revision(), revision, "failed requests leave the revision untouched");
+}

@@ -440,6 +440,21 @@ export interface TableDuplicateColumnOperation {
     readonly column: number;
 }
 
+/**
+ * Edit operation that mirrors one table along its diagonal: rows become
+ * columns and columns become rows, and the row heights and column widths swap
+ * with them.
+ *
+ * A table with any merged cell answers with `session/argument-invalid` so
+ * spans cannot break, a non-table element with `object/type-mismatch`, and an
+ * unknown slide or element with `object/not-found`.
+ */
+export interface TableTransposeOperation {
+    readonly op: 'table.transpose';
+    readonly slideId: SlideId;
+    readonly elementId: ElementId;
+}
+
 /** Placement, stacking and table operations addressed to elements of one slide. */
 export type ElementOperation =
     | ElementReorderOperation
@@ -448,7 +463,8 @@ export type ElementOperation =
     | ElementDistributeOperation
     | TableMoveColumnOperation
     | TableDuplicateRowOperation
-    | TableDuplicateColumnOperation;
+    | TableDuplicateColumnOperation
+    | TableTransposeOperation;
 
 /**
  * Edit operation that rebuilds one element as a new element at the end of the

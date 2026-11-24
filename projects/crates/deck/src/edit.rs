@@ -1206,6 +1206,44 @@ impl EditState {
                 self.deferred.push(Deferred::SetRowHeights { slide, element, heights });
                 None
             }
+            "table.transpose" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
+                let target = model.element(&element).ok_or_else(|| {
+                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
+                        .with_slide(slide.clone())
+                        .with_element(element.clone())
+                })?;
+                let ElementContent::Table(table) = &target.content
+                else {
+                    return Err(DeckError::new(
+                        codes::OBJECT_TYPE_MISMATCH,
+                        format!("element `{element}` is not a table; transposition needs a table"),
+                    )
+                    .with_slide(slide.clone())
+                    .with_element(element.clone()));
+                };
+                let rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
+                let widths =
+                    Self::queued_widths(&self.deferred, &slide, &element).unwrap_or_else(|| table.column_widths_emu.clone());
+                if rows.iter().any(|row| row.cells.iter().any(|cell| cell.row_span > 1 || cell.column_span > 1)) {
+                    return Err(invalid("transposition needs a table without merged cells"));
+                }
+                if rows.iter().any(|row| row.cells.len() != widths.len()) {
+                    return Err(invalid("transposition needs a rectangular table; every row must carry one cell per column"));
+                }
+                let transposed = (0..widths.len())
+                    .map(|column| TableRow {
+                        height_emu: widths[column],
+                        cells: rows.iter().map(|row| row.cells[column].clone()).collect(),
+                    })
+                    .collect::<Vec<_>>();
+                let heights = rows.iter().map(|row| row.height_emu).collect::<Vec<_>>();
+                self.queue_table_rows(slide.clone(), element.clone(), transposed);
+                self.deferred.push(Deferred::SetColumnWidths { slide, element, widths: heights });
+                None
+            }
             "element.setChartData" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
