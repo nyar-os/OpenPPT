@@ -77,13 +77,10 @@ fn max_points(request: &Value) -> Result<usize, ServiceError> {
         None | Some(Value::Null) => Ok(DEFAULT_MAX_POINTS),
         Some(value) => {
             let number = value.as_u64().and_then(|number| usize::try_from(number).ok()).ok_or_else(|| {
-                ServiceError::new("session/argument-invalid", "`maxPointsPerSlide` must be a positive integer")
+                ServiceError::argument("`maxPointsPerSlide` must be a positive integer")
             })?;
             if number == 0 || number > MAX_POINTS_LIMIT {
-                return Err(ServiceError::new(
-                    "session/argument-invalid",
-                    format!("`maxPointsPerSlide` must be between 1 and {MAX_POINTS_LIMIT}"),
-                ));
+                return Err(ServiceError::argument(format!("`maxPointsPerSlide` must be between 1 and {MAX_POINTS_LIMIT}")));
             }
             Ok(number)
         }

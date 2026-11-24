@@ -24,9 +24,9 @@ pub fn edit(deck: &mut Deck, request: &Value) -> Result<Value, ServiceError> {
     let operations = request
         .get("operations")
         .and_then(Value::as_array)
-        .ok_or_else(|| ServiceError::new("session/argument-invalid", "`operations` must be an array"))?;
+        .ok_or_else(|| ServiceError::argument("`operations` must be an array"))?;
     if operations.is_empty() {
-        return Err(ServiceError::new("session/argument-invalid", "an edit script needs at least one operation"));
+        return Err(ServiceError::argument("an edit script needs at least one operation"));
     }
     let (results, resolved, deferred) = deck
         .transaction(expected, |draft| {
@@ -192,7 +192,7 @@ pub fn slide_detail(deck: &Deck, slide_id: &str) -> Result<Value, ServiceError> 
         .slides()
         .iter()
         .find(|slide| slide.id.as_str() == slide_id)
-        .ok_or_else(|| ServiceError::new("object/not-found", format!("slide `{slide_id}` does not exist")))?;
+        .ok_or_else(|| ServiceError::not_found("slide", slide_id))?;
     let index = deck.slides().iter().position(|candidate| candidate.id == slide.id).unwrap_or(0);
     let elements = slide
         .elements
@@ -232,7 +232,7 @@ pub fn asset_bytes(deck: &Deck, asset_id: &str) -> Result<Value, ServiceError> {
         .assets
         .iter()
         .find(|asset| asset.id.as_str() == asset_id)
-        .ok_or_else(|| ServiceError::new("object/not-found", format!("asset `{asset_id}` does not exist")))?;
+        .ok_or_else(|| ServiceError::not_found("asset", asset_id))?;
     Ok(json!({
         "id": asset.id.as_str(),
         "mediaType": asset.media_type,
@@ -1655,7 +1655,7 @@ fn expected_revision(request: &Value) -> Result<Option<u64>, ServiceError> {
         Some(value) => value
             .as_u64()
             .map(Some)
-            .ok_or_else(|| ServiceError::new("session/argument-invalid", "`expectedRevision` must be a non-negative integer")),
+            .ok_or_else(|| ServiceError::argument("`expectedRevision` must be a non-negative integer")),
     }
 }
 

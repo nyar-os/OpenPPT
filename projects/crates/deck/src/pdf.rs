@@ -21,19 +21,16 @@ pub(crate) fn export(deck: &Deck, request: &Value) -> Result<Value, ServiceError
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| ServiceError::new("session/argument-invalid", "`target` must be a non-empty file path"))?;
+        .ok_or_else(|| ServiceError::argument("`target` must be a non-empty file path"))?;
     let overwrite = request.get("overwrite").and_then(Value::as_bool).unwrap_or(false);
     let loss_policy = request.get("lossPolicy").and_then(Value::as_str).unwrap_or("warn");
     if !matches!(loss_policy, "warn" | "error") {
-        return Err(ServiceError::new("session/argument-invalid", "`lossPolicy` must be `warn` or `error`"));
+        return Err(ServiceError::argument("`lossPolicy` must be `warn` or `error`"));
     }
 
-    let export = export_pdf_bytes(deck).map_err(|error| ServiceError::new(error.code, error.message))?;
+    let export = export_pdf_bytes(deck).map_err(|error| ServiceError::engine(error.code, error.message))?;
     if loss_policy == "error" && !export.losses.is_empty() {
-        return Err(ServiceError::new(
-            "export/loss-exceeded",
-            format!("the pdf projection would drop {} construct(s)", export.losses.len()),
-        ));
+        return Err(ServiceError::loss_exceeded(export.losses.len(), loss_policy));
     }
     crate::write_atomically(&export.bytes, Path::new(target), overwrite)?;
 

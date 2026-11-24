@@ -54,12 +54,12 @@ fn insert(deck: Deck) -> u64 {
 
 fn with_deck<T>(handle: u64, work: impl FnOnce(&Deck) -> T) -> Result<T> {
     let guard = lock();
-    guard.decks.get(&handle).map(work).ok_or_else(|| Error::new("deck/not-found: the deck handle is not open"))
+    guard.decks.get(&handle).map(work).ok_or_else(|| Error::new("the deck handle is not open").code("deck/not-found"))
 }
 
 fn with_deck_mut<T>(handle: u64, work: impl FnOnce(&mut Deck) -> T) -> Result<T> {
     let mut guard = lock();
-    guard.decks.get_mut(&handle).map(work).ok_or_else(|| Error::new("deck/not-found: the deck handle is not open"))
+    guard.decks.get_mut(&handle).map(work).ok_or_else(|| Error::new("the deck handle is not open").code("deck/not-found"))
 }
 
 fn remove(handle: u64) -> bool {
@@ -92,7 +92,7 @@ fn insert_playback(playback: Playback) -> u64 {
 
 fn with_playback<T>(handle: u64, work: impl FnOnce(&Playback) -> T) -> Result<T> {
     let guard = playback_lock();
-    guard.items.get(&handle).map(work).ok_or_else(|| Error::new("object/not-found: the presentation handle is not open"))
+    guard.items.get(&handle).map(work).ok_or_else(|| Error::new("the presentation handle is not open").code("object/not-found"))
 }
 
 fn remove_playback(handle: u64) -> bool {
@@ -100,11 +100,15 @@ fn remove_playback(handle: u64) -> bool {
 }
 
 fn fail(error: ServiceError) -> Error {
-    Error::new(format!("{}: {}", error.code, error.message))
+    let mut mapped = Error::new(error.message().to_owned()).code(error.code().to_owned());
+    if !error.params().is_null() {
+        mapped = mapped.detail(json!({ "params": error.params() }));
+    }
+    mapped
 }
 
 fn argument(ctx: &CallContext, index: usize) -> Result<JsValue> {
-    ctx.args().get(index).copied().ok_or_else(|| Error::new("session/argument-invalid: a required argument is missing"))
+    ctx.args().get(index).copied().ok_or_else(|| Error::new("a required argument is missing").code("session/argument-invalid"))
 }
 
 fn text(ctx: &CallContext, index: usize) -> Result<String> {
@@ -132,7 +136,7 @@ fn check_render_format(request: &Value) -> Result<()> {
 
 fn handle(ctx: &CallContext, index: usize) -> Result<u64> {
     let raw = argument(ctx, index)?.as_i64()?;
-    u64::try_from(raw).map_err(|_| Error::new("session/argument-invalid: the deck handle must be a non-negative integer"))
+    u64::try_from(raw).map_err(|_| Error::new("the deck handle must be a non-negative integer").code("session/argument-invalid"))
 }
 
 fn parse_size(request: &Value) -> Result<Option<SizeRequest>> {
@@ -143,11 +147,11 @@ fn parse_size(request: &Value) -> Result<Option<SizeRequest>> {
             let number = |key: &str| {
                 map.get(key)
                     .and_then(Value::as_f64)
-                    .ok_or_else(|| Error::new(format!("session/argument-invalid: `size.{key}` must be a number in points")))
+                    .ok_or_else(|| Error::new(format!("`size.{key}` must be a number in points")).code("session/argument-invalid"))
             };
             Ok(Some(SizeRequest::Points { width_pt: number("widthPt")?, height_pt: number("heightPt")? }))
         }
-        _ => Err(Error::new("session/argument-invalid: `size` must be a named ratio or `{ widthPt, heightPt }`")),
+        _ => Err(Error::new("`size` must be a named ratio or `{ widthPt, heightPt }`").code("session/argument-invalid")),
     }
 }
 
@@ -177,7 +181,7 @@ fn capabilities(ctx: CallContext) -> Result<JsValue> {
 fn deck_create(ctx: CallContext) -> Result<JsValue> {
     let raw = text(&ctx, 0)?;
     let request: Value =
-        serde_json::from_str(&raw).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))?;
+        serde_json::from_str(&raw).map_err(|error| Error::new(error.to_string()).code("session/argument-invalid"))?;
     let slides = request["slides"]
         .as_array()
         .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect())
@@ -259,7 +263,7 @@ fn deck_inspect(ctx: CallContext) -> Result<JsValue> {
         Some(value) => {
             let raw = value.as_string()?;
             let names: Vec<String> =
-                serde_json::from_str(&raw).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))?;
+                serde_json::from_str(&raw).map_err(|error| Error::new(error.to_string()).code("session/argument-invalid"))?;
             let mut parsed = Vec::with_capacity(names.len());
             for name in names {
                 parsed.push(
@@ -289,7 +293,7 @@ fn deck_edit(ctx: CallContext) -> Result<JsValue> {
     let handle = handle(&ctx, 0)?;
     let raw = text(&ctx, 1)?;
     let request: Value =
-        serde_json::from_str(&raw).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))?;
+        serde_json::from_str(&raw).map_err(|error| Error::new(error.to_string()).code("session/argument-invalid"))?;
     let report = with_deck_mut(handle, |deck| open_ppt_deck::edit::edit(deck, &request))?.map_err(fail)?;
     respond(&ctx, &report)
 }
@@ -341,7 +345,7 @@ fn deck_redo(ctx: CallContext) -> Result<JsValue> {
 fn deck_close(ctx: CallContext) -> Result<JsValue> {
     let handle = handle(&ctx, 0)?;
     if !remove(handle) {
-        return Err(Error::new("deck/not-found: the deck handle is not open"));
+        return Err(Error::new("the deck handle is not open").code("deck/not-found"));
     }
     ctx.env().boolean(true)
 }
@@ -390,7 +394,7 @@ fn pptx_slide(ctx: CallContext) -> Result<JsValue> {
     let handle = handle(&ctx, 0)?;
     let raw = argument(&ctx, 1)?.as_i64()?;
     let index =
-        u32::try_from(raw).map_err(|_| Error::new("session/argument-invalid: the slide number must be a positive integer"))?;
+        u32::try_from(raw).map_err(|_| Error::new("the slide number must be a positive integer").code("session/argument-invalid"))?;
     let slide = with_playback(handle, |playback| playback.slide(index)).and_then(|slide| slide.map_err(fail))?;
     respond(&ctx, &json!({ "slide": slide }))
 }
@@ -400,7 +404,7 @@ fn pptx_slide(ctx: CallContext) -> Result<JsValue> {
 fn pptx_close(ctx: CallContext) -> Result<JsValue> {
     let handle = handle(&ctx, 0)?;
     if !remove_playback(handle) {
-        return Err(Error::new("object/not-found: the presentation handle is not open"));
+        return Err(Error::new("the presentation handle is not open").code("object/not-found"));
     }
     ctx.env().boolean(true)
 }
@@ -452,7 +456,7 @@ impl IpcHandler for DeckIpcHandler {
             "deck.open" => {
                 let path = value.get("path").and_then(Value::as_str).unwrap_or("").trim().to_string();
                 if path.is_empty() {
-                    return failure(id, "openError", "an open request needs a project path".to_string());
+                    return failure(id, "openError", json!({ "code": "session/argument-invalid", "message": "an open request needs a project path" }));
                 }
                 match call_open(&path) {
                     Ok(result) => reply(id, "openResult", result),
@@ -488,7 +492,7 @@ impl IpcHandler for DeckIpcHandler {
             "deck.save" => {
                 let path = value.get("path").and_then(Value::as_str).unwrap_or("").trim().to_string();
                 if path.is_empty() {
-                    return failure(id, "saveError", "a save request needs a project path".to_string());
+                    return failure(id, "saveError", json!({ "code": "session/argument-invalid", "message": "a save request needs a project path" }));
                 }
                 let overwrite = value.get("overwrite").and_then(Value::as_bool).unwrap_or(true);
                 match call_save(handle_of(&value), &path, overwrite) {
@@ -537,13 +541,17 @@ impl IpcHandler for DeckIpcHandler {
                     reply(id, "closedResult", json!({ "closed": true }))
                 }
                 else {
-                    failure(id, "closeError", "the deck handle is not open".to_string())
+                    failure(id, "closeError", json!({ "code": "deck/not-found", "message": "the deck handle is not open" }))
                 }
             }
             "pptx.open" => {
                 let path = value.get("path").and_then(Value::as_str).unwrap_or("").trim().to_string();
                 if path.is_empty() {
-                    return failure(id, "pptxOpenError", "an open request needs a presentation path".to_string());
+                    return failure(
+                        id,
+                        "pptxOpenError",
+                        json!({ "code": "session/argument-invalid", "message": "an open request needs a presentation path" }),
+                    );
                 }
                 match call_pptx_open(&path) {
                     Ok(opened) => reply(id, "pptxOpenResult", opened),
@@ -564,7 +572,7 @@ impl IpcHandler for DeckIpcHandler {
                     reply(id, "pptxClosedResult", json!({ "closed": true }))
                 }
                 else {
-                    failure(id, "pptxCloseError", "the presentation handle is not open".to_string())
+                    failure(id, "pptxCloseError", json!({ "code": "object/not-found", "message": "the presentation handle is not open" }))
                 }
             }
             _ => IpcOutcome::Ignored,
@@ -579,45 +587,63 @@ fn reply(id: Value, kind: &str, payload: Value) -> IpcOutcome {
     IpcOutcome::ReplyToPage(body.to_string())
 }
 
-fn failure(id: Value, kind: &str, message: String) -> IpcOutcome {
-    reply(id, kind, json!({ "message": message }))
+fn failure(id: Value, kind: &str, error: Value) -> IpcOutcome {
+    // The reply carries the verifiable `code` and typed `params` beside the
+    // display `message`, so the page can branch on the contract, not on prose.
+    let mut body = json!({ "message": error["message"].clone(), "code": error["code"].clone() });
+    if let Some(params) = error.get("params").filter(|params| !params.is_null()) {
+        body["params"] = params.clone();
+    }
+    reply(id, kind, body)
 }
 
 fn handle_of(value: &Value) -> u64 {
     value.get("handle").and_then(Value::as_u64).unwrap_or(0)
 }
 
-fn service_failure(error: ServiceError) -> String {
-    format!("{}: {}", error.code, error.message)
+fn service_failure(error: ServiceError) -> Value {
+    let mut payload = json!({ "code": error.code(), "message": error.message() });
+    if !error.params().is_null() {
+        payload["params"] = error.params().clone();
+    }
+    payload
 }
 
-fn deck_call<T>(handle: u64, work: impl FnOnce(&Deck) -> T) -> std::result::Result<T, String> {
-    with_deck(handle, work).map_err(|error| error.to_string())
+fn wae_failure(error: Error) -> Value {
+    let mut payload = json!({ "code": error.code_name().unwrap_or("io/failure"), "message": error.message() });
+    if let Some(params) = error.detail_value().and_then(|detail| detail.get("params").cloned()) {
+        payload["params"] = params;
+    }
+    payload
 }
 
-fn deck_call_mut<T>(handle: u64, work: impl FnOnce(&mut Deck) -> T) -> std::result::Result<T, String> {
-    with_deck_mut(handle, work).map_err(|error| error.to_string())
+fn deck_call<T>(handle: u64, work: impl FnOnce(&Deck) -> T) -> std::result::Result<T, Value> {
+    with_deck(handle, work).map_err(wae_failure)
+}
+
+fn deck_call_mut<T>(handle: u64, work: impl FnOnce(&mut Deck) -> T) -> std::result::Result<T, Value> {
+    with_deck_mut(handle, work).map_err(wae_failure)
 }
 
 fn deck_service_call<T>(
     handle: u64,
     work: impl FnOnce(&Deck) -> std::result::Result<T, ServiceError>,
-) -> std::result::Result<T, String> {
+) -> std::result::Result<T, Value> {
     match with_deck(handle, work) {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(error)) => Err(service_failure(error)),
-        Err(error) => Err(error.to_string()),
+        Err(error) => Err(wae_failure(error)),
     }
 }
 
-fn call_create(request: &Value) -> std::result::Result<Value, String> {
+fn call_create(request: &Value) -> std::result::Result<Value, Value> {
     let slides = request["slides"]
         .as_array()
         .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect())
         .unwrap_or_default();
     let deck = open_ppt_deck::create(CreateRequest {
         title: request["title"].as_str().map(str::to_string),
-        size: parse_size(request).map_err(|error| error.to_string())?,
+        size: parse_size(request).map_err(wae_failure)?,
         theme: request["theme"].as_str().map(str::to_string),
         slides,
     })
@@ -627,61 +653,61 @@ fn call_create(request: &Value) -> std::result::Result<Value, String> {
     Ok(json!({ "handle": handle, "deck": summary }))
 }
 
-fn call_open(path: &str) -> std::result::Result<Value, String> {
+fn call_open(path: &str) -> std::result::Result<Value, Value> {
     let deck = open_ppt_deck::open(Path::new(path)).map_err(service_failure)?;
     let summary = open_ppt_deck::summary(&deck);
     let handle = insert(deck);
     Ok(json!({ "handle": handle, "deck": summary }))
 }
 
-fn call_summary(handle: u64) -> std::result::Result<Value, String> {
+fn call_summary(handle: u64) -> std::result::Result<Value, Value> {
     deck_call(handle, open_ppt_deck::summary)
 }
 
-fn call_slide(handle: u64, slide_id: &str) -> std::result::Result<Value, String> {
+fn call_slide(handle: u64, slide_id: &str) -> std::result::Result<Value, Value> {
     deck_service_call(handle, |deck| open_ppt_deck::edit::slide_detail(deck, slide_id))
 }
 
-fn call_save(handle: u64, path: &str, overwrite: bool) -> std::result::Result<Value, String> {
+fn call_save(handle: u64, path: &str, overwrite: bool) -> std::result::Result<Value, Value> {
     match with_deck(handle, |deck| {
         open_ppt_deck::save(deck, Path::new(path), overwrite)
             .map(|bytes| json!({ "path": path, "revision": deck.revision(), "slides": deck.slides().len(), "bytes": bytes }))
     }) {
         Ok(Ok(report)) => Ok(report),
         Ok(Err(error)) => Err(service_failure(error)),
-        Err(error) => Err(error.to_string()),
+        Err(error) => Err(wae_failure(error)),
     }
 }
 
-fn call_edit(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+fn call_edit(handle: u64, request: &Value) -> std::result::Result<Value, Value> {
     match with_deck_mut(handle, |deck| open_ppt_deck::edit::edit(deck, request)) {
         Ok(Ok(report)) => Ok(report),
         Ok(Err(error)) => Err(service_failure(error)),
-        Err(error) => Err(error.to_string()),
+        Err(error) => Err(wae_failure(error)),
     }
 }
 
-fn call_render(handle: u64, request: &Value) -> std::result::Result<Value, String> {
-    check_render_format(request).map_err(|error| error.to_string())?;
+fn call_render(handle: u64, request: &Value) -> std::result::Result<Value, Value> {
+    check_render_format(request).map_err(wae_failure)?;
     deck_service_call(handle, open_ppt_deck::render)
 }
 
-fn call_export(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+fn call_export(handle: u64, request: &Value) -> std::result::Result<Value, Value> {
     deck_service_call(handle, |deck| open_ppt_deck::export(deck, request))
 }
 
-fn call_pptx_open(path: &str) -> std::result::Result<Value, String> {
+fn call_pptx_open(path: &str) -> std::result::Result<Value, Value> {
     let playback = open_ppt_deck::pptx::open(Path::new(path)).map_err(service_failure)?;
     let presentation = playback.summary();
     let handle = insert_playback(playback);
     Ok(json!({ "handle": handle, "presentation": presentation }))
 }
 
-fn call_pptx_slide(handle: u64, index: u32) -> std::result::Result<Value, String> {
+fn call_pptx_slide(handle: u64, index: u32) -> std::result::Result<Value, Value> {
     match with_playback(handle, |playback| playback.slide(index)) {
         Ok(Ok(slide)) => Ok(slide),
         Ok(Err(error)) => Err(service_failure(error)),
-        Err(error) => Err(error.to_string()),
+        Err(error) => Err(wae_failure(error)),
     }
 }
 

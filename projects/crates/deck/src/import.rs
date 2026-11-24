@@ -38,7 +38,7 @@ pub struct ImportOutcome {
 /// Reads one package and maps it onto an editable deck.
 pub fn import_pptx(path: &Path) -> Result<ImportOutcome, ServiceError> {
     let bytes = fs::read(path)
-        .map_err(|error| ServiceError::new("io/read", format!("could not read `{}`: {error}", path.display())))?;
+        .map_err(|error| ServiceError::io_read(path, error))?;
     import_pptx_bytes(&path.display().to_string(), &bytes)
 }
 
@@ -50,7 +50,7 @@ pub fn import_pptx_bytes(label: &str, bytes: &[u8]) -> Result<ImportOutcome, Ser
 
 fn build(presentation: PptxPresentation) -> Result<ImportOutcome, ServiceError> {
     if presentation.size.cx <= 0 || presentation.size.cy <= 0 {
-        return Err(ServiceError::new("format/invalid-package", "the presentation slide size is missing or not positive"));
+        return Err(ServiceError::format_invalid("the presentation slide size is missing or not positive"));
     }
 
     let mut deck = Deck::create(DeckCreateOptions {

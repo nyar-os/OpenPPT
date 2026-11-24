@@ -81,7 +81,7 @@ impl Playback {
     pub fn slide(&self, index: u32) -> Result<Value, ServiceError> {
         let view =
             self.views.iter().find(|view| view.index == index).ok_or_else(|| {
-                ServiceError::new("object/not-found", format!("slide {index} is not part of the played show"))
+                ServiceError::not_found("played slide", &index.to_string())
             })?;
         Ok(json!({
             "index": view.index,
@@ -95,7 +95,7 @@ impl Playback {
 /// Reads one package and renders every visible slide.
 pub fn open(path: &Path) -> Result<Playback, ServiceError> {
     let bytes = fs::read(path)
-        .map_err(|error| ServiceError::new("io/read", format!("could not read `{}`: {error}", path.display())))?;
+        .map_err(|error| ServiceError::io_read(path, error))?;
     let presentation = import_pptx_bytes(&path.display().to_string(), &bytes).map_err(format_error)?;
     let render = render_presentation(&presentation, &RenderOptions::default());
     let mut issues = presentation.issues;
@@ -123,5 +123,5 @@ pub(crate) fn format_error(error: FormatError) -> ServiceError {
         FormatError::Unsupported { .. } => "format/unsupported",
         FormatError::Budget { .. } => "session/budget-exceeded",
     };
-    ServiceError::new(code, error.to_string())
+    ServiceError::engine(code, error.to_string())
 }

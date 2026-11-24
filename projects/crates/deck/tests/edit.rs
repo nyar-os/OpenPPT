@@ -104,11 +104,11 @@ fn slide_move_rejects_unknown_slides_and_out_of_range_indexes() {
 
     let error = edit(&mut deck, &json!({ "operations": [{ "op": "slide.move", "slideId": "slide-missing", "index": 0 }] }))
         .expect_err("an unknown slide is refused");
-    assert_eq!(error.code, "object/not-found");
+    assert_eq!(error.code(), "object/not-found");
 
     let error = edit(&mut deck, &json!({ "operations": [{ "op": "slide.move", "slideId": ids[0], "index": 2 }] }))
         .expect_err("an out-of-range index is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     assert_eq!(deck.revision(), revision, "failed moves consume no revision");
     assert_eq!(slide_titles(&deck), ["Intro", "Plan"], "the order is unchanged");
@@ -146,15 +146,15 @@ fn slide_swap_rejects_unknown_slides_and_out_of_range_indexes() {
 
     let error = edit(&mut deck, &json!({ "operations": [{ "op": "slide.swap", "slideId": "slide-missing", "index": 0 }] }))
         .expect_err("an unknown slide is refused");
-    assert_eq!(error.code, "object/not-found");
+    assert_eq!(error.code(), "object/not-found");
 
     let error = edit(&mut deck, &json!({ "operations": [{ "op": "slide.swap", "slideId": ids[0], "index": 2 }] }))
         .expect_err("an out-of-range index is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     let error = edit(&mut deck, &json!({ "operations": [{ "op": "slide.swap", "slideId": ids[0] }] }))
         .expect_err("a missing index is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     assert_eq!(deck.revision(), revision, "failed swaps consume no revision");
     assert_eq!(slide_titles(&deck), ["Intro", "Plan"], "the order is unchanged");
@@ -207,7 +207,7 @@ fn z_order_rejects_unknown_slides_and_elements() {
         }),
     )
     .expect_err("an unknown element is refused");
-    assert_eq!(error.code, "object/not-found");
+    assert_eq!(error.code(), "object/not-found");
 
     let error = edit(
         &mut deck,
@@ -216,7 +216,7 @@ fn z_order_rejects_unknown_slides_and_elements() {
         }),
     )
     .expect_err("an unknown slide is refused");
-    assert_eq!(error.code, "object/not-found");
+    assert_eq!(error.code(), "object/not-found");
 
     assert_eq!(deck.revision(), revision, "failed restacks consume no revision");
     assert_eq!(element_ids(&deck, &slide), [first, second], "the order is unchanged");
@@ -326,7 +326,7 @@ fn invalid_reorder_and_background_arguments_do_not_commit() {
         }),
     )
     .expect_err("an unknown element is refused");
-    assert_eq!(error.code, "object/not-found");
+    assert_eq!(error.code(), "object/not-found");
 
     let error = edit(
         &mut deck,
@@ -335,7 +335,7 @@ fn invalid_reorder_and_background_arguments_do_not_commit() {
         }),
     )
     .expect_err("an out-of-range index is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     let error = edit(
         &mut deck,
@@ -348,7 +348,7 @@ fn invalid_reorder_and_background_arguments_do_not_commit() {
         }),
     )
     .expect_err("an unknown fill kind is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     let error = edit(
         &mut deck,
@@ -361,7 +361,7 @@ fn invalid_reorder_and_background_arguments_do_not_commit() {
         }),
     )
     .expect_err("an unusable colour is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
     assert_eq!(deck.revision(), revision, "failed scripts consume no revision");
 
     let report = edit(
@@ -511,7 +511,7 @@ fn element_align_rejects_bad_arguments_without_committing() {
         }),
     )
     .expect_err("an empty list is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     let error = edit(
         &mut deck,
@@ -525,7 +525,7 @@ fn element_align_rejects_bad_arguments_without_committing() {
         }),
     )
     .expect_err("a repeated element is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     let error = edit(
         &mut deck,
@@ -539,7 +539,7 @@ fn element_align_rejects_bad_arguments_without_committing() {
         }),
     )
     .expect_err("an unknown element is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     let error = edit(
         &mut deck,
@@ -553,7 +553,7 @@ fn element_align_rejects_bad_arguments_without_committing() {
         }),
     )
     .expect_err("an unknown edge is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     let error = edit(
         &mut deck,
@@ -568,7 +568,7 @@ fn element_align_rejects_bad_arguments_without_committing() {
         }),
     )
     .expect_err("an unknown reference frame is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     assert_eq!(deck.revision(), revision, "failed alignments consume no revision");
     let detail = slide_detail(&deck, &slide).expect("slide exists");
@@ -644,7 +644,7 @@ fn element_distribute_rejects_bad_arguments_without_committing() {
         }),
     )
     .expect_err("fewer than three elements is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     let error = edit(
         &mut deck,
@@ -658,7 +658,7 @@ fn element_distribute_rejects_bad_arguments_without_committing() {
         }),
     )
     .expect_err("a repeated element is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     let error = edit(
         &mut deck,
@@ -672,7 +672,7 @@ fn element_distribute_rejects_bad_arguments_without_committing() {
         }),
     )
     .expect_err("an unknown element is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     let error = edit(
         &mut deck,
@@ -686,7 +686,7 @@ fn element_distribute_rejects_bad_arguments_without_committing() {
         }),
     )
     .expect_err("an unknown axis is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     assert_eq!(deck.revision(), revision, "failed distributions consume no revision");
     let detail = slide_detail(&deck, &slide).expect("slide exists");
@@ -746,7 +746,7 @@ fn a_failing_operation_rolls_back_the_whole_alignment_batch() {
         }),
     )
     .expect_err("the second operation fails");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
     assert_eq!(deck.revision(), revision, "no revision is consumed");
 
     let detail = slide_detail(&deck, &slide).expect("slide exists");
@@ -982,7 +982,7 @@ fn element_duplicate_rejects_unknown_target_slides() {
         }),
     )
     .expect_err("an unknown target slide is refused");
-    assert_eq!(error.code, "object/not-found");
+    assert_eq!(error.code(), "object/not-found");
     assert_eq!(deck.revision(), revision, "failed duplicates consume no revision");
 }
 
@@ -999,7 +999,7 @@ fn element_duplicate_rejects_unknown_targets_and_unsupported_kinds() {
         }),
     )
     .expect_err("an unknown slide is refused");
-    assert_eq!(error.code, "object/not-found");
+    assert_eq!(error.code(), "object/not-found");
 
     let error = edit(
         &mut deck,
@@ -1008,7 +1008,7 @@ fn element_duplicate_rejects_unknown_targets_and_unsupported_kinds() {
         }),
     )
     .expect_err("an unknown element is refused");
-    assert_eq!(error.code, "object/not-found");
+    assert_eq!(error.code(), "object/not-found");
 
     assert_eq!(deck.revision(), revision, "failed duplicates consume no revision");
     assert_eq!(element_ids(&deck, &slide).len(), count, "failed duplicates append nothing");
@@ -1022,7 +1022,7 @@ fn element_duplicate_rejects_unknown_targets_and_unsupported_kinds() {
         }),
     )
     .expect_err("charts are refused");
-    assert_eq!(error.code, "object/unsupported");
+    assert_eq!(error.code(), "object/unsupported");
     assert_eq!(deck.revision(), revision, "unsupported duplicates consume no revision");
     assert_eq!(element_ids(&deck, &slide), vec![chart], "the slide is unchanged");
 }
@@ -1085,7 +1085,7 @@ fn element_text_style_reaches_every_run() {
     let error =
         edit(&mut deck, &json!({ "operations": [{ "op": "element.setTextStyle", "slideId": slide, "elementId": element }] }))
             .expect_err("an empty style is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     for operation in [
         json!({ "op": "element.setTextStyle", "slideId": slide, "elementId": element, "sizePt": 0 }),
@@ -1093,7 +1093,7 @@ fn element_text_style_reaches_every_run() {
         json!({ "op": "element.setTextStyle", "slideId": slide, "elementId": "element-missing", "bold": true }),
     ] {
         let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("invalid text style");
-        assert!(error.code == "session/argument-invalid" || error.code == "object/not-found");
+        assert!(error.code() == "session/argument-invalid" || error.code() == "object/not-found");
     }
     assert_eq!(deck.revision(), revision + 1, "failed styles consume no revision");
 
@@ -1108,7 +1108,7 @@ fn element_text_style_reaches_every_run() {
         }] }),
     )
     .expect_err("a shape has no text runs");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 }
 
 #[test]
@@ -1144,7 +1144,7 @@ fn element_hyperlink_stamps_and_clears_every_run() {
         json!({ "op": "element.setHyperlink", "slideId": slide, "elementId": "element-missing", "url": "https://x.test" }),
     ] {
         let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("invalid hyperlink");
-        assert!(error.code == "session/argument-invalid" || error.code == "object/not-found");
+        assert!(error.code() == "session/argument-invalid" || error.code() == "object/not-found");
     }
     assert_eq!(deck.revision(), revision + 2, "failed hyperlinks consume no revision");
 
@@ -1154,7 +1154,7 @@ fn element_hyperlink_stamps_and_clears_every_run() {
         &json!({ "operations": [{ "op": "element.setHyperlink", "slideId": shape_slide, "elementId": shape, "url": "https://x.test" }] }),
     )
     .expect_err("a shape has no text runs");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 }
 
 #[test]
@@ -1176,7 +1176,7 @@ fn deck_title_sets_trims_and_clears() {
         json!({ "op": "deck.setTitle", "title": 3 }),
     ] {
         let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("bad title");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     assert_eq!(deck.revision(), revision + 2, "failed titles consume no revision");
 }
@@ -1203,7 +1203,7 @@ fn slide_add_can_seed_a_title_and_notes() {
         json!({ "op": "slide.add", "title": 5 }),
     ] {
         let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("bad slide seed");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     assert_eq!(deck.revision(), revision + 1, "failed slides consume no revision");
 }
@@ -1252,7 +1252,7 @@ fn slide_append_notes_refuses_blank_text_and_unknown_slides() {
     ] {
         let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("invalid append");
         assert_eq!(
-            error.code,
+            error.code(),
             if operation["slideId"] == json!("slide-missing") { "object/not-found" } else { "session/argument-invalid" },
             "the failure reports the right code"
         );
@@ -1286,7 +1286,7 @@ fn deck_size_accepts_named_ratios_and_custom_points() {
         json!({ "op": "deck.setSize", "width": 0.0, "height": 540.0 }),
     ] {
         let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("bad size");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     assert_eq!(deck.revision(), revision + 2, "failed sizes consume no revision");
 }
@@ -1305,7 +1305,7 @@ fn a_failing_duplicate_rolls_back_the_whole_batch() {
         }),
     )
     .expect_err("the second duplicate fails");
-    assert_eq!(error.code, "object/not-found");
+    assert_eq!(error.code(), "object/not-found");
     assert_eq!(deck.revision(), revision, "no revision is consumed");
     assert_eq!(element_ids(&deck, &slide), sources, "the first duplicate is rolled back");
 }
@@ -1427,11 +1427,11 @@ fn deck_replace_text_rejects_bad_arguments() {
 
     let error = edit(&mut deck, &json!({ "operations": [{ "op": "deck.replaceText", "find": "", "replace": "income" }] }))
         .expect_err("an empty needle is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     let error = edit(&mut deck, &json!({ "operations": [{ "op": "deck.replaceText", "find": "revenue" }] }))
         .expect_err("a missing replacement is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     let error = edit(
         &mut deck,
@@ -1440,7 +1440,7 @@ fn deck_replace_text_rejects_bad_arguments() {
         }),
     )
     .expect_err("a non-boolean option is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     assert_eq!(deck.revision(), revision, "failed replacements consume no revision");
 }
@@ -1488,14 +1488,14 @@ fn asset_remove_refuses_referenced_and_unknown_assets() {
 
     let error = edit(&mut deck, &json!({ "operations": [{ "op": "asset.remove", "assetId": used }] }))
         .expect_err("a referenced asset is refused");
-    assert_eq!(error.code, "object/unsupported");
+    assert_eq!(error.code(), "object/unsupported");
 
     let error = edit(&mut deck, &json!({ "operations": [{ "op": "asset.remove", "assetId": "asset-missing" }] }))
         .expect_err("an unknown asset is refused");
-    assert_eq!(error.code, "object/not-found");
+    assert_eq!(error.code(), "object/not-found");
 
     let error = edit(&mut deck, &json!({ "operations": [{ "op": "asset.remove" }] })).expect_err("a missing id is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     assert_eq!(deck.revision(), revision, "failed removals consume no revision");
     assert_eq!(asset_ids(&deck).len(), 2, "both assets survive the failed removals");
@@ -1527,20 +1527,20 @@ fn slide_set_layout_rejects_unknown_objects_and_arguments() {
         &json!({ "operations": [{ "op": "slide.setLayout", "slideId": "slide-missing", "layout": "layout-1" }] }),
     )
     .expect_err("an unknown slide is refused");
-    assert_eq!(error.code, "object/not-found");
+    assert_eq!(error.code(), "object/not-found");
 
     let error =
         edit(&mut deck, &json!({ "operations": [{ "op": "slide.setLayout", "slideId": slide, "layout": "layout-missing" }] }))
             .expect_err("an unknown layout is refused");
-    assert_eq!(error.code, "object/not-found");
+    assert_eq!(error.code(), "object/not-found");
 
     let error = edit(&mut deck, &json!({ "operations": [{ "op": "slide.setLayout", "slideId": slide }] }))
         .expect_err("a missing layout is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     let error = edit(&mut deck, &json!({ "operations": [{ "op": "slide.setLayout", "slideId": slide, "layout": 42 }] }))
         .expect_err("a non-string layout is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     assert_eq!(deck.revision(), revision, "failed layout edits consume no revision");
     assert!(slide_detail(&deck, &slide).expect("slide exists")["layout"].is_null(), "the slide keeps its layout");
@@ -1605,9 +1605,9 @@ fn element_set_line_refuses_non_shapes_and_bad_arguments() {
     ] {
         let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("the target is refused");
         assert!(
-            error.code == "object/type-mismatch" || error.code == "object/not-found",
+            error.code() == "object/type-mismatch" || error.code() == "object/not-found",
             "unexpected code {}",
-            error.code
+            error.code()
         );
     }
     for line in [json!({}), json!({ "widthPt": 0 }), json!({ "widthPt": "wide" }), json!({ "color": 42 })] {
@@ -1616,11 +1616,11 @@ fn element_set_line_refuses_non_shapes_and_bad_arguments() {
             &json!({ "operations": [{ "op": "element.setLine", "slideId": second, "elementId": text_element, "line": line }] }),
         )
         .expect_err("the line is refused");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     let error = edit(&mut deck, &json!({ "operations": [{ "op": "element.setLine", "slideId": second, "elementId": text_element }] }))
         .expect_err("a missing line is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
     assert_eq!(deck.revision(), revision, "failed lines consume no revision");
 }
 
@@ -1689,7 +1689,7 @@ fn table_geometry_rewrites_column_widths_and_row_heights() {
         &json!({ "operations": [{ "op": "table.setColumnWidths", "slideId": second, "elementId": text_element, "columnWidthsPt": [100.0] }] }),
     )
     .expect_err("text is not a table");
-    assert_eq!(error.code, "object/type-mismatch");
+    assert_eq!(error.code(), "object/type-mismatch");
     for operation in [
         json!({ "op": "table.setColumnWidths", "slideId": second, "elementId": element, "columnWidthsPt": [100.0] }),
         json!({ "op": "table.setRowHeights", "slideId": second, "elementId": element, "rowHeightsPt": [30.0] }),
@@ -1697,7 +1697,7 @@ fn table_geometry_rewrites_column_widths_and_row_heights() {
         json!({ "op": "table.setRowHeights", "slideId": second, "elementId": element, "rowHeightsPt": [] }),
     ] {
         let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("bad geometry is refused");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
 }
 
@@ -1711,7 +1711,7 @@ fn table_set_cell_refuses_non_tables_and_bad_coordinates() {
     let error =
         edit(&mut deck, &json!({ "operations": [{ "op": "table.setCell", "slideId": second, "elementId": text_element, "row": 0, "column": 0, "text": "x" }] }))
             .expect_err("text is not a table");
-    assert_eq!(error.code, "object/type-mismatch");
+    assert_eq!(error.code(), "object/type-mismatch");
     for operation in [
         json!({ "op": "table.setCell", "slideId": second, "elementId": table, "row": 2, "column": 0, "text": "x" }),
         json!({ "op": "table.setCell", "slideId": second, "elementId": table, "row": 0, "column": 2, "text": "x" }),
@@ -1720,7 +1720,7 @@ fn table_set_cell_refuses_non_tables_and_bad_coordinates() {
         json!({ "op": "table.setCell", "slideId": second, "elementId": table, "row": -1, "column": 0, "text": "x" }),
     ] {
         let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("the cell request is refused");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     assert_eq!(deck.revision(), revision, "failed cell edits consume no revision");
 }
@@ -1762,7 +1762,7 @@ fn element_set_fill_refuses_non_shapes_and_bad_arguments() {
         &json!({ "operations": [{ "op": "element.setFill", "slideId": second, "elementId": text_element, "fill": "#0000FF" }] }),
     )
     .expect_err("text carries no fill");
-    assert_eq!(error.code, "object/type-mismatch");
+    assert_eq!(error.code(), "object/type-mismatch");
 
     let error = edit(
         &mut deck,
@@ -1771,21 +1771,21 @@ fn element_set_fill_refuses_non_shapes_and_bad_arguments() {
         }),
     )
     .expect_err("an unknown element is refused");
-    assert_eq!(error.code, "object/not-found");
+    assert_eq!(error.code(), "object/not-found");
 
     let error = edit(
         &mut deck,
         &json!({ "operations": [{ "op": "element.setFill", "slideId": "slide-missing", "elementId": text_element, "fill": "#0000FF" }] }),
     )
     .expect_err("an unknown slide is refused");
-    assert_eq!(error.code, "object/not-found");
+    assert_eq!(error.code(), "object/not-found");
 
     let error = edit(
         &mut deck,
         &json!({ "operations": [{ "op": "element.setFill", "slideId": second, "elementId": text_element, "fill": 42 }] }),
     )
     .expect_err("a non-string fill is refused");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     assert_eq!(deck.revision(), revision, "failed fills consume no revision");
 }
@@ -2105,8 +2105,8 @@ fn table_move_column_refuses_tables_with_horizontal_merges() {
         }] }),
     )
     .expect_err("a horizontal merge blocks column moves");
-    assert_eq!(error.code, "session/argument-invalid");
-    assert!(error.message.contains("horizontal merge"), "{}", error.message);
+    assert_eq!(error.code(), "session/argument-invalid");
+    assert!(error.message().contains("horizontal merge"), "{}", error.message());
     assert_eq!(deck.revision(), revision, "a refused move leaves the revision untouched");
 }
 
@@ -2238,8 +2238,8 @@ fn table_duplicate_refuses_merges_and_bad_arguments() {
     let revision = deck.revision();
     let error = edit(&mut deck, &json!({ "operations": [{ "op": "table.duplicateRow", "slideId": slide, "elementId": table, "row": 0 }] }))
         .expect_err("a vertical merge blocks row duplication");
-    assert_eq!(error.code, "session/argument-invalid");
-    assert!(error.message.contains("vertical merge"), "{}", error.message);
+    assert_eq!(error.code(), "session/argument-invalid");
+    assert!(error.message().contains("vertical merge"), "{}", error.message());
 
     let (mut deck, slide, table) = horizontally_merged_deck();
     let error = edit(
@@ -2247,8 +2247,8 @@ fn table_duplicate_refuses_merges_and_bad_arguments() {
         &json!({ "operations": [{ "op": "table.duplicateColumn", "slideId": slide, "elementId": table, "column": 0 }] }),
     )
     .expect_err("a horizontal merge blocks column duplication");
-    assert_eq!(error.code, "session/argument-invalid");
-    assert!(error.message.contains("horizontal merge"), "{}", error.message);
+    assert_eq!(error.code(), "session/argument-invalid");
+    assert!(error.message().contains("horizontal merge"), "{}", error.message());
     assert_eq!(deck.revision(), revision, "a refused duplication leaves the revision untouched");
 
     let (mut deck, _first, second) = replace_deck();
@@ -2267,7 +2267,7 @@ fn table_duplicate_refuses_merges_and_bad_arguments() {
         (json!({ "op": "table.duplicateColumn", "slideId": second, "elementId": "element-missing", "column": 0 }), "object/not-found"),
     ] {
         let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("invalid duplication");
-        assert_eq!(error.code, code, "{} reports the right code", operation["op"].as_str().expect("op name"));
+        assert_eq!(error.code(), code, "{} reports the right code", operation["op"].as_str().expect("op name"));
     }
     assert_eq!(deck.revision(), revision, "failed requests leave the revision untouched");
 }
@@ -2344,8 +2344,8 @@ fn table_transpose_refuses_merges_non_tables_and_unknown_objects() {
     let revision = deck.revision();
     let error = edit(&mut deck, &json!({ "operations": [{ "op": "table.transpose", "slideId": slide, "elementId": table }] }))
         .expect_err("a merged cell blocks transposition");
-    assert_eq!(error.code, "session/argument-invalid");
-    assert!(error.message.contains("merged cells"), "{}", error.message);
+    assert_eq!(error.code(), "session/argument-invalid");
+    assert!(error.message().contains("merged cells"), "{}", error.message());
     assert_eq!(deck.revision(), revision, "a refused transpose leaves the revision untouched");
 
     let (mut deck, _first, second) = replace_deck();
@@ -2359,7 +2359,7 @@ fn table_transpose_refuses_merges_non_tables_and_unknown_objects() {
         (json!({ "op": "table.transpose", "slideId": second, "elementId": "element-missing" }), "object/not-found"),
     ] {
         let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("invalid transpose");
-        assert_eq!(error.code, code);
+        assert_eq!(error.code(), code);
     }
     assert_eq!(deck.revision(), revision, "failed requests leave the revision untouched");
 }

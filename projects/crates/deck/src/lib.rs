@@ -43,18 +43,99 @@ const PRESENTATION_FORMATS: &[&str] = &[
 ];
 
 /// Stable failure of one binding operation.
+///
+/// Construction goes through the typed constructors below: each one fixes a
+/// stable code and attaches the parameters that code's contract promises, so
+/// the binding forwards `code`, `params` and the original OS error instead of
+/// re-deriving them from prose. The free-form pair is crate-internal only,
+/// for forwarding upstream engine codes that already carry their own contract.
 #[derive(Debug)]
 pub struct ServiceError {
-    /// Stable, comparable code.
-    pub code: String,
-    /// Human-readable message; never carries binary payloads.
-    pub message: String,
+    code: String,
+    message: String,
+    params: Value,
+    source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
 
 impl ServiceError {
-    /// Builds a failure from a stable code and a message.
-    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self { code: code.into(), message: message.into() }
+    fn build(code: &str, message: impl Into<String>) -> Self {
+        Self { code: code.to_owned(), message: message.into(), params: Value::Null, source: None }
+    }
+
+    fn with_params(mut self, params: Value) -> Self {
+        self.params = params;
+        self
+    }
+
+    fn source(mut self, error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        self.source = Some(Box::new(error));
+        self
+    }
+
+    /// `session/argument-invalid`: a request parameter was rejected.
+    pub fn argument(message: impl Into<String>) -> Self {
+        Self::build("session/argument-invalid", message)
+    }
+
+    /// `object/not-found`: the addressed object is absent from the deck.
+    pub fn not_found(kind: &str, id: &str) -> Self {
+        Self::build("object/not-found", format!("`{kind}` `{id}` does not exist")).with_params(json!({ "kind": kind, "id": id }))
+    }
+
+    /// `io/read`: reading a file failed; the OS error kind is preserved.
+    pub fn io_read(path: &Path, error: io::Error) -> Self {
+        let kind = format!("{:?}", error.kind());
+        Self::build("io/read", format!("could not read `{}`: {error}", path.display()))
+            .with_params(json!({ "path": path.display().to_string(), "kind": kind }))
+            .source(error)
+    }
+
+    /// `io/write`: publishing a file failed.
+    pub fn io_write(path: &Path, reason: impl Into<String>) -> Self {
+        Self::build("io/write", format!("could not publish `{}`: {}", path.display(), reason.into()))
+            .with_params(json!({ "path": path.display().to_string() }))
+    }
+
+    /// `io/exists`: the target is present and overwrite was not granted.
+    pub fn io_exists(path: &Path) -> Self {
+        Self::build("io/exists", format!("`{}` already exists; pass overwrite to replace it", path.display()))
+            .with_params(json!({ "path": path.display().to_string() }))
+    }
+
+    /// `format/unsupported`: the requested exchange format is not offered.
+    pub fn format_unsupported(format: &str) -> Self {
+        Self::build("format/unsupported", format!("`{format}` is not an offered export format")).with_params(json!({ "format": format }))
+    }
+
+    /// `format/invalid-package`: a package failed validation.
+    pub fn format_invalid(message: impl Into<String>) -> Self {
+        Self::build("format/invalid-package", message)
+    }
+
+    /// `export/loss-exceeded`: the loss policy refused the export.
+    pub fn loss_exceeded(count: usize, policy: &str) -> Self {
+        Self::build("export/loss-exceeded", format!("the export dropped {count} constructs and the loss policy is `{policy}`"))
+            .with_params(json!({ "count": count, "policy": policy }))
+    }
+
+    /// Forwards a failure whose stable code already exists upstream.
+    pub(crate) fn engine(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self { code: code.into(), message: message.into(), params: Value::Null, source: None }
+    }
+
+    /// Stable, comparable code.
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    /// Human-readable message; never carries binary payloads.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Typed per-code parameters, or `Value::Null` when the code carries none.
+    pub fn params(&self) -> &Value {
+        &self.params
     }
 }
 
@@ -64,17 +145,22 @@ impl fmt::Display for ServiceError {
     }
 }
 
-impl std::error::Error for ServiceError {}
+impl std::error::Error for ServiceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source.as_ref().map(|error| error.as_ref() as &(dyn std::error::Error + 'static))
+    }
+}
 
 impl From<DeckError> for ServiceError {
     fn from(error: DeckError) -> Self {
-        Self::new(error.code(), error.message())
+        Self::engine(error.code(), error.message())
     }
 }
 
 impl From<io::Error> for ServiceError {
     fn from(error: io::Error) -> Self {
-        Self::new("io/failure", error.to_string())
+        let kind = format!("{:?}", error.kind());
+        Self::build("io/failure", error.to_string()).with_params(json!({ "kind": kind })).source(error)
     }
 }
 
@@ -171,11 +257,11 @@ pub fn create(request: CreateRequest) -> Result<Deck, ServiceError> {
         None => None,
         Some(SizeRequest::Named(name)) => Some(
             DeckSize::named(name)
-                .ok_or_else(|| ServiceError::new("session/argument-invalid", format!("unknown slide size `{name}`")))?,
+                .ok_or_else(|| ServiceError::argument(format!("unknown slide size `{name}`")))?,
         ),
         Some(SizeRequest::Points { width_pt, height_pt }) => {
             Some(DeckSize::from_points(*width_pt, *height_pt).ok_or_else(|| {
-                ServiceError::new("session/argument-invalid", "custom slide size must use finite positive point values")
+                ServiceError::argument("custom slide size must use finite positive point values")
             })?)
         }
     };
@@ -185,7 +271,7 @@ pub fn create(request: CreateRequest) -> Result<Deck, ServiceError> {
             .layouts()
             .first()
             .map(|layout| layout.id.clone())
-            .ok_or_else(|| ServiceError::new("object/not-found", "the default deck has no layout"))?;
+            .ok_or_else(|| ServiceError::not_found("layout", "default"))?;
         deck.transaction(None, |edit| {
             for title in &request.slides {
                 let slide = edit.add_slide(SlideAddOptions { layout: Some(layout.clone()), index: None })?;
@@ -200,7 +286,7 @@ pub fn create(request: CreateRequest) -> Result<Deck, ServiceError> {
 /// Reads a native project container.
 pub fn open(path: &Path) -> Result<Deck, ServiceError> {
     let bytes = fs::read(path)
-        .map_err(|error| ServiceError::new("io/read", format!("could not read `{}`: {error}", path.display())))?;
+        .map_err(|error| ServiceError::io_read(path, error))?;
     decode_project(&bytes).map_err(ServiceError::from)
 }
 
@@ -216,17 +302,14 @@ pub fn save(deck: &Deck, path: &Path, overwrite: bool) -> Result<usize, ServiceE
 /// Publishes bytes to `path` through a temporary file and a rename.
 pub(crate) fn write_atomically(bytes: &[u8], path: &Path, overwrite: bool) -> Result<(), ServiceError> {
     if path.exists() && !overwrite {
-        return Err(ServiceError::new(
-            "io/exists",
-            format!("`{}` already exists; pass overwrite to replace it", path.display()),
-        ));
+        return Err(ServiceError::io_exists(path));
     }
     let options = PublishOptions {
         overwrite: if overwrite { OverwritePolicy::Replace } else { OverwritePolicy::RefuseExisting },
         ..PublishOptions::default()
     };
     publish_bytes_with_options(publish_target(path), bytes, options)
-        .map_err(|error| ServiceError::new("io/write", format!("could not publish `{}`: {error}", path.display())))
+        .map_err(|error| ServiceError::io_write(path, error.to_string()))
 }
 
 /// Keeps a bare file name anchored to the working directory so the publisher
@@ -329,7 +412,7 @@ pub fn parse_checks(value: &str) -> Result<Vec<InspectCheck>, ServiceError> {
         .filter(|name| !name.is_empty())
         .map(|name| {
             InspectCheck::parse(name)
-                .ok_or_else(|| ServiceError::new("session/argument-invalid", format!("unknown check `{name}`")))
+                .ok_or_else(|| ServiceError::argument(format!("unknown check `{name}`")))
         })
         .collect()
 }

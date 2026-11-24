@@ -24,26 +24,21 @@ pub fn export(deck: &Deck, request: &Value) -> Result<Value, ServiceError> {
     if format == "pdf" {
         return crate::pdf::export(deck, request);
     }
-    let format = document_presentation_pptx::Format::parse(format).ok_or_else(|| {
-        ServiceError::new(
-            "format/unsupported",
-            format!("`{format}` is not a presentation export target; use pptx, ppsx, potx or pdf"),
-        )
-    })?;
+    let format = document_presentation_pptx::Format::parse(format).ok_or_else(|| ServiceError::format_unsupported(format))?;
     let target = request
         .get("target")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| ServiceError::new("session/argument-invalid", "`target` must be a non-empty file path"))?;
+        .ok_or_else(|| ServiceError::argument("`target` must be a non-empty file path"))?;
     let overwrite = request.get("overwrite").and_then(Value::as_bool).unwrap_or(false);
     let loss_policy = request.get("lossPolicy").and_then(Value::as_str).unwrap_or("warn");
     if !matches!(loss_policy, "warn" | "error") {
-        return Err(ServiceError::new("session/argument-invalid", "`lossPolicy` must be `warn` or `error`"));
+        return Err(ServiceError::argument("`lossPolicy` must be `warn` or `error`"));
     }
 
     let written =
-        export_presentation_bytes(deck, format).map_err(|error| ServiceError::new("format/invalid-package", error.message))?;
+        export_presentation_bytes(deck, format).map_err(|error| ServiceError::format_invalid(error.message))?;
     let losses: Vec<Value> = written
         .losses
         .iter()
@@ -58,10 +53,7 @@ pub fn export(deck: &Deck, request: &Value) -> Result<Value, ServiceError> {
         })
         .collect();
     if loss_policy == "error" && !losses.is_empty() {
-        return Err(ServiceError::new(
-            "export/loss-exceeded",
-            format!("the {} projection would drop {} construct(s)", format.as_str(), losses.len()),
-        ));
+        return Err(ServiceError::loss_exceeded(losses.len(), loss_policy));
     }
     crate::write_atomically(&written.bytes, Path::new(target), overwrite)?;
 
