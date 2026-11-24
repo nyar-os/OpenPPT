@@ -22,3 +22,27 @@ jobs:
         run: pnpm typecheck
       - name: Test
         run: pnpm test
+
+  examples:
+    name: examples (staged binding)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Build the native binding
+        run: cargo build -p open-ppt-napi
+      - name: Stage the addon under the extension Node loads
+        run: cp target/debug/libopen_ppt_napi.so target/debug/open_ppt_napi.node
+      - name: Compile the package sources
+        run: pnpm --filter @wae/open-ppt run build:test
+      - name: Run the review workflow example against the real engine
+        run: node projects/packages/open-ppt/dist-test/examples/review-workflow.js
+        env:
+          OPEN_PPT_NATIVE: ${{ github.workspace }}/target/debug/open_ppt_napi.node
