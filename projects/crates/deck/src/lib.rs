@@ -290,7 +290,7 @@ pub fn inspect(deck: &Deck, checks: Option<Vec<InspectCheck>>) -> Value {
         .issues
         .iter()
         .map(|issue| {
-            json!({
+            let mut entry = json!({
                 "code": issue.code,
                 "severity": match issue.severity {
                     Severity::Info => "info",
@@ -298,11 +298,18 @@ pub fn inspect(deck: &Deck, checks: Option<Vec<InspectCheck>>) -> Value {
                     Severity::Error => "error",
                 },
                 "revision": issue.revision,
-                "slideId": issue.slide_id.as_ref().map(|id| id.as_str()),
-                "elementId": issue.element_id.as_ref().map(|id| id.as_str()),
                 "recoverable": issue.recoverable,
                 "message": issue.message,
-            })
+            });
+            // Absent locators are omitted, not null, so the JSON matches the
+            // optional `slideId` and `elementId` the TypeScript surface declares.
+            if let Some(slide_id) = &issue.slide_id {
+                entry["slideId"] = Value::from(slide_id.as_str());
+            }
+            if let Some(element_id) = &issue.element_id {
+                entry["elementId"] = Value::from(element_id.as_str());
+            }
+            entry
         })
         .collect::<Vec<_>>();
 

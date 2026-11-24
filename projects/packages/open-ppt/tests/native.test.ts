@@ -245,6 +245,67 @@ test('render and export answer with real pages and a real package', { skip }, as
     await ppt.dispose();
 });
 
+test('inspection findings locate their own slide and element and survive save/reopen', { skip }, async () => {
+    const ppt = new OpenPPT();
+    const deck = await ppt.create({ title: 'Q4 review', size: { widthPt: 960, heightPt: 540 }, slides: ['Highlights', 'Revenue'] });
+    const [, second] = await deck.slides.list();
+    assert.ok(second);
+    const revenueText = await (await deck.slides.get(second.id)).elements.addText({
+        text: 'Plan: expand to two regions in Q1',
+        transform: { xPt: 720, yPt: 420, widthPt: 480, heightPt: 90 },
+    });
+
+    // A whole-deck run reports every finding with its own slide and element;
+    // an unimplemented check reports one finding with neither locator, which
+    // consumers must be able to tell apart instead of passing `null` to an update.
+    const inspection = await deck.inspect({ checks: ['out-of-bounds', 'contrast', 'overflow'] });
+    const unsupported = inspection.issues.filter((issue) => issue.code === 'deck.check-unsupported');
+    assert.equal(unsupported.length, 1);
+    const [unsupportedIssue] = unsupported;
+    assert.ok(unsupportedIssue);
+    assert.equal(unsupportedIssue.slideId, undefined);
+    assert.equal(unsupportedIssue.elementId, undefined);
+    const bounds = inspection.issues.filter((issue) => issue.code === 'deck.out-of-bounds');
+    assert.equal(bounds.length, 1);
+    const [bound] = bounds;
+    assert.ok(bound);
+    const boundSlideId = bound.slideId;
+    const boundElementId = bound.elementId;
+    assert.ok(boundSlideId !== undefined && boundElementId !== undefined);
+    assert.equal(boundSlideId, second.id);
+    assert.equal(boundElementId, revenueText.id);
+
+    // Fix the reported object on its own slide, then re-check the new revision.
+    await (await deck.slides.get(boundSlideId)).elements.update(boundElementId, {
+        transform: { xPt: 72, yPt: 140, widthPt: 480, heightPt: 90 },
+    });
+    const recheck = await deck.inspect({ checks: ['out-of-bounds', 'contrast'] });
+    assert.ok(recheck.passed);
+    assert.deepEqual(recheck.issues.map((issue) => issue.code), []);
+
+    // Reviewable previews for both slides, and an export that reports its losses.
+    const dir = mkdtempSync(join(tmpdir(), 'open-ppt-inspect-'));
+    const render = await deck.render({ format: 'svg', target: dir });
+    assert.equal(render.pages.length, 2);
+    const sheet = await deck.contactSheet({ target: join(dir, 'review.svg'), pages: [0, 1] });
+    assert.equal(sheet.slideIds.length, 2);
+    const exported = await deck.export({ format: 'pptx', target: join(dir, 'q4.pptx'), overwrite: true });
+    assert.ok(Array.isArray(exported.losses));
+
+    // Save, reopen and verify the fixed object is still editable.
+    const target = join(dir, 'q4.oppt');
+    await deck.save({ target, overwrite: true });
+    await deck.close();
+    const reopened = await ppt.open({ path: target });
+    const [, reopenedRevenue] = await reopened.slides.list();
+    assert.ok(reopenedRevenue);
+    const restored = await (await reopened.slides.get(reopenedRevenue.id)).elements.get(revenueText.id);
+    assert.equal(restored.transform.xPt, 72);
+    assert.equal(restored.transform.widthPt, 480);
+    await reopened.close();
+    await ppt.dispose();
+});
+
 test('contact sheets can be limited to selected slides', { skip }, async () => {
     const ppt = new OpenPPT();
     const deck = await ppt.create({ title: 'Sheet', size: { widthPt: 960, heightPt: 540 } });

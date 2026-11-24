@@ -2,7 +2,7 @@
 
 How an agent discovers capabilities, drives the `open-ppt` CLI and composes the `@wae/open-ppt` SDK. The CLI is the reliable surface for short, one-shot tasks such as `create`, `open`, `play`, `render` and `export`; complex editing is a TypeScript workflow built on `new OpenPPT()`.
 
-- **GUI** (`open-ppt open <file>`, `open-ppt play <file>`): humans review layout, drag elements and run the show.
+- **GUI** (`open-ppt gui <file>`): humans review layout, drag elements and run the show. `open-ppt open <file>` is a head-of-session summary command — it prints the committed revision and slides, it does not open a window.
 - **SDK**: anything data-driven or repeated — slide and element edits, notes, charts, inspection loops, previews, save and export.
 - **Not delivered yet**: theme/layout enumeration and application, playback object creation, and autofit text. The engine reports these as `object/unsupported` with a feature name.
 
@@ -59,7 +59,7 @@ Anything that positions elements, reacts to inspection findings or fills slides 
 import { OpenPPT } from '@wae/open-ppt';
 
 const ppt = new OpenPPT();
-const deck = await ppt.create({ title: 'Q4 review', slides: ['Highlights', 'Revenue'] });
+const deck = await ppt.create({ title: 'Q4 review', size: { widthPt: 960, heightPt: 540 }, slides: ['Highlights', 'Revenue'] });
 const [firstId, secondId] = deck.summary().slides.map((slide) => slide.id);
 const first = await deck.slides.get(firstId);
 const second = await deck.slides.get(secondId);
@@ -70,25 +70,40 @@ await first.elements.addText({
     text: 'Revenue is up 18%',
     transform: { xPt: 72, yPt: 140, widthPt: 480, heightPt: 90 },
 });
-await second.elements.addText({ text: 'Plan: expand to two regions in Q1' });
+const revenueText = await second.elements.addText({
+    text: 'Plan: expand to two regions in Q1',
+    transform: { xPt: 720, yPt: 420, widthPt: 480, heightPt: 90 },
+});
 
-// Inspect the current revision, then fix only the object that was reported.
-const inspection = await deck.inspect({ checks: ['overflow'] });
+// Inspect the whole deck, then fix only the reported object on its own slide.
+// `slideId` and `elementId` are absent when a finding has no addressable
+// object — an unimplemented check such as `overflow` reports `deck.check-unsupported`
+// with neither — so guard on both before calling `elements.update`.
+const inspection = await deck.inspect({ checks: ['out-of-bounds', 'contrast', 'overflow'] });
 for (const issue of inspection.issues) {
-    if (issue.elementId !== undefined) {
-        await first.elements.update(issue.elementId, { text: 'Revenue is up 18%' });
+    if (issue.slideId === undefined || issue.elementId === undefined) {
+        continue;
     }
+    const slide = await deck.slides.get(issue.slideId);
+    await slide.elements.update(issue.elementId, { transform: { xPt: 72, yPt: 140, widthPt: 480, heightPt: 90 } });
 }
+
+// Re-check the revision the fixes were committed to.
+const recheck = await deck.inspect({ checks: ['out-of-bounds', 'contrast'] });
+console.log(recheck.passed, recheck.issues.map((issue) => issue.code));
 
 // Preview, export an exchange format, save the native project and reopen it.
 await deck.render({ format: 'svg', target: 'preview' });
-await deck.contactSheet({ target: 'review.svg', pages: [0, 2] });
-await deck.export({ format: 'pptx', target: 'q4.pptx', overwrite: true });
+await deck.contactSheet({ target: 'review.svg', pages: [0, 1] });
+const exported = await deck.export({ format: 'pptx', target: 'q4.pptx', overwrite: true });
+console.log(exported.losses);
 await deck.save({ target: 'q4.oppt', overwrite: true });
 await deck.close();
 
 const reopened = await ppt.open({ path: 'q4.oppt' });
-console.log(reopened.summary().revision, reopened.summary().slides.length);
+const [, revenue] = await reopened.slides.list();
+const restored = await (await reopened.slides.get(revenue.id)).elements.get(revenueText.id);
+console.log(restored.transform.xPt, restored.transform.widthPt);
 await reopened.close();
 ```
 
