@@ -6,7 +6,7 @@
  * methods, so a failure is always awaited and always carries a stable code.
  */
 
-import { OpenPPTError } from './errors.js';
+import { OpenPPTError, setErrorLocale } from './errors.js';
 import { Deck, type DeckOwner } from './deck.js';
 import { formatFromPath, type DeckIntent, type PresentationFormat } from './formats.js';
 import { PptxReader } from './pptx-reader.js';
@@ -33,6 +33,7 @@ export class OpenPPT implements DeckOwner {
 
     constructor(options: OpenPPTOptions = {}) {
         this.locale = options.locale ?? 'en';
+        setErrorLocale(this.locale);
     }
 
     /** Whether {@link dispose} has run. */

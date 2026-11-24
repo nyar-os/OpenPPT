@@ -31,8 +31,8 @@ export { closePptx, openPptx, pptxSlide } from './service.js';
 export type { PptxHandle, PptxIssue, PptxPresentation, PptxSlideFrame } from './service.js';
 export { GuiError, closeGui, defaultGuiContentDir, isGuiOpen, openGui, pumpEvents, runGui } from './gui.js';
 export type { GuiCloseResult, GuiOpenResult, GuiStatus, OpenGuiOptions } from './gui.js';
-export { NotImplementedError, OpenPPTError, errorCodes, isOpenPPTError } from './errors.js';
-export type { OpenPPTErrorCode, OpenPPTErrorDetails, OpenPPTErrorOptions } from './errors.js';
+export { NotImplementedError, OpenPPTError, errorCodes, isOpenPPTError, renderErrorCopy, setErrorLocale } from './errors.js';
+export type { OpenPPTErrorCode, OpenPPTErrorDetails, OpenPPTErrorOptions, OpenPPTErrorParams } from './errors.js';
 export { defaultIntentFor, formatFromPath, formatInfo, formatRegistry, presentationFormats } from './formats.js';
 export type {
     DeckIntent,

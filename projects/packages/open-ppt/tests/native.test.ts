@@ -82,6 +82,27 @@ test('create, save and reopen keep one handle per deck', { skip }, async () => {
     );
 });
 
+test('real binding failures deliver typed params beside the code', { skip }, async () => {
+    const ppt = new OpenPPT();
+    const deck = await ppt.create({ title: 'Contract' });
+    assert.throws(
+        () => deck.slideDetail('slide-missing'),
+        (error) =>
+            isOpenPPTError(error) &&
+            error.code === 'object/not-found' &&
+            error.params.kind === 'slide' &&
+            error.params.id === 'slide-missing',
+    );
+    const dir = mkdtempSync(join(tmpdir(), 'open-ppt-contract-'));
+    const target = join(dir, 'contract.project');
+    await deck.save({ target });
+    await assert.rejects(
+        deck.save({ target }),
+        (error) => isOpenPPTError(error) && error.code === 'io/exists' && error.params.path === target,
+    );
+    await ppt.dispose();
+});
+
 test('editing a slide commits once per operation and survives save/reopen', { skip }, async () => {
     const ppt = new OpenPPT();
     const deck = await ppt.create({ title: 'Edits' });

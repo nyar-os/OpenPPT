@@ -6,7 +6,7 @@
  * here knows about a command line.
  */
 
-import { NotImplementedError, OpenPPTError, errorCodes, type OpenPPTErrorCode } from './errors.js';
+import { NotImplementedError, OpenPPTError, errorCodes, renderErrorCopy, type OpenPPTErrorCode, type OpenPPTErrorParams } from './errors.js';
 import { nativeBinding } from './native.js';
 import type {
     ExportFormat,
@@ -164,13 +164,33 @@ function translate(error: unknown): OpenPPTError {
     if (error instanceof OpenPPTError) {
         return error;
     }
-    const message = error instanceof Error ? error.message : String(error);
-    const separator = message.indexOf(': ');
-    const code = separator > 0 ? message.slice(0, separator) : '';
-    if (knownCodes.has(code)) {
-        return new OpenPPTError(code as OpenPPTErrorCode, message.slice(separator + 2), { details: { feature: code } });
+    const native = error instanceof Error ? (error as Error & { code?: unknown; detail?: unknown }) : undefined;
+    const message = native ? native.message : String(error);
+    const rawCode = native?.code;
+    const code = typeof rawCode === 'string' ? rawCode : undefined;
+    if (code !== undefined) {
+        const params = readParams(native?.detail);
+        return new OpenPPTError(code as OpenPPTErrorCode, renderErrorCopy(code, params, message), { params, cause: error });
     }
-    return new OpenPPTError('format/invalid-package', message, { cause: error });
+    // Compatibility entry for addons older than the structured contract, which
+    // concatenated `code: message` into the Error text. Current bindings always
+    // carry `code` and `detail.params`, so this split never runs against them.
+    const separator = message.indexOf(': ');
+    const legacy = separator > 0 ? message.slice(0, separator) : '';
+    if (knownCodes.has(legacy)) {
+        return new OpenPPTError(legacy as OpenPPTErrorCode, message.slice(separator + 2), { cause: error });
+    }
+    return new OpenPPTError('binding/failure', message, { cause: error });
+}
+
+function readParams(detail: unknown): OpenPPTErrorParams {
+    if (typeof detail === 'object' && detail !== null) {
+        const params = (detail as { params?: unknown }).params;
+        if (typeof params === 'object' && params !== null && !Array.isArray(params)) {
+            return params as OpenPPTErrorParams;
+        }
+    }
+    return {};
 }
 
 /** Reads the capability matrix of the installed addon. */

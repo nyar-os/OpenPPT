@@ -153,7 +153,21 @@ impl std::error::Error for ServiceError {
 
 impl From<DeckError> for ServiceError {
     fn from(error: DeckError) -> Self {
-        Self::engine(error.code(), error.message())
+        let mut params = Map::new();
+        if let Some(revision) = error.revision() {
+            params.insert("revision".to_owned(), Value::from(revision));
+        }
+        if let Some(slide_id) = error.slide_id() {
+            params.insert("slideId".to_owned(), Value::from(slide_id.as_str()));
+        }
+        if let Some(element_id) = error.element_id() {
+            params.insert("elementId".to_owned(), Value::from(element_id.as_str()));
+        }
+        let mut mapped = Self::engine(error.code(), error.message());
+        if !params.is_empty() {
+            mapped = mapped.with_params(Value::Object(params));
+        }
+        mapped
     }
 }
 
