@@ -114,6 +114,52 @@ fn slide_move_rejects_unknown_slides_and_out_of_range_indexes() {
     assert_eq!(slide_titles(&deck), ["Intro", "Plan"], "the order is unchanged");
 }
 
+#[test]
+fn slide_swap_exchanges_two_slides_in_place() {
+    let (mut deck, ids) = titled_deck(&["Intro", "Plan", "Close"]);
+    let revision = deck.revision();
+    let report = edit(&mut deck, &json!({ "operations": [{ "op": "slide.swap", "slideId": ids[0], "index": 2 }] }))
+        .expect("slide swap commits");
+
+    assert_eq!(report["revision"], revision + 1, "one script is one revision bump");
+    assert_eq!(slide_titles(&deck), ["Close", "Plan", "Intro"], "only the two slides move");
+    assert_eq!(report["deck"]["slides"][0]["id"].as_str(), Some(ids[2].as_str()));
+    assert_eq!(report["deck"]["slides"][2]["id"].as_str(), Some(ids[0].as_str()));
+    assert_eq!(report["results"][0], Value::Null, "a swap reports no created id");
+}
+
+#[test]
+fn slide_swap_with_its_own_position_keeps_the_order() {
+    let (mut deck, ids) = titled_deck(&["Intro", "Plan"]);
+    let revision = deck.revision();
+    edit(&mut deck, &json!({ "operations": [{ "op": "slide.swap", "slideId": ids[1], "index": 1 }] }))
+        .expect("a same-position swap is a no-op");
+
+    assert_eq!(deck.revision(), revision + 1, "a no-op still commits its batch");
+    assert_eq!(slide_titles(&deck), ["Intro", "Plan"], "the order is unchanged");
+}
+
+#[test]
+fn slide_swap_rejects_unknown_slides_and_out_of_range_indexes() {
+    let (mut deck, ids) = titled_deck(&["Intro", "Plan"]);
+    let revision = deck.revision();
+
+    let error = edit(&mut deck, &json!({ "operations": [{ "op": "slide.swap", "slideId": "slide-missing", "index": 0 }] }))
+        .expect_err("an unknown slide is refused");
+    assert_eq!(error.code, "object/not-found");
+
+    let error = edit(&mut deck, &json!({ "operations": [{ "op": "slide.swap", "slideId": ids[0], "index": 2 }] }))
+        .expect_err("an out-of-range index is refused");
+    assert_eq!(error.code, "session/argument-invalid");
+
+    let error = edit(&mut deck, &json!({ "operations": [{ "op": "slide.swap", "slideId": ids[0] }] }))
+        .expect_err("a missing index is refused");
+    assert_eq!(error.code, "session/argument-invalid");
+
+    assert_eq!(deck.revision(), revision, "failed swaps consume no revision");
+    assert_eq!(slide_titles(&deck), ["Intro", "Plan"], "the order is unchanged");
+}
+
 fn element_ids(deck: &Deck, slide: &str) -> Vec<String> {
     slide_detail(deck, slide).expect("slide exists")["elements"]
         .as_array()

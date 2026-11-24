@@ -49,6 +49,7 @@ pub fn edit(deck: &mut Deck, request: &Value) -> Result<Value, ServiceError> {
 enum Deferred {
     Reorder { slide: SlideId, element: ElementId, index: usize },
     MoveSlide { slide: SlideId, index: usize },
+    SwapSlides { first: SlideId, second: SlideId },
     Background { slide: SlideId, fill: Option<Fill> },
     TableRows { slide: SlideId, element: ElementId, rows: Vec<TableRow> },
     RemoveAsset { asset: AssetId },
@@ -91,6 +92,13 @@ fn apply_deferred(deck: &mut Deck, deferred: Vec<Deferred>) -> Result<(), Servic
                 };
                 let moved = document.slides.remove(position);
                 document.slides.insert(index.min(document.slides.len()), moved);
+            }
+            Deferred::SwapSlides { first, second } => {
+                let from = document.slides.iter().position(|candidate| candidate.id == first);
+                let to = document.slides.iter().position(|candidate| candidate.id == second);
+                if let (Some(from), Some(to)) = (from, to) {
+                    document.slides.swap(from, to);
+                }
             }
             Deferred::Background { slide, fill } => {
                 if let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide) {
@@ -430,6 +438,20 @@ impl EditState {
                     return Err(invalid(format!("`index` must be below {slides} for this deck")));
                 }
                 self.deferred.push(Deferred::MoveSlide { slide, index });
+                None
+            }
+            "slide.swap" => {
+                let slide = self.slide(operation)?;
+                let index = required_usize(operation, "index")?;
+                if draft.document().slide(&slide).is_none() {
+                    return Err(missing_slide(&slide));
+                }
+                let slides = draft.document().slides.len();
+                if index >= slides {
+                    return Err(invalid(format!("`index` must be below {slides} for this deck")));
+                }
+                let other = draft.document().slides[index].id.clone();
+                self.deferred.push(Deferred::SwapSlides { first: slide, second: other });
                 None
             }
             "slide.duplicate" => {

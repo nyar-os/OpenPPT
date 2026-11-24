@@ -459,6 +459,20 @@ export interface SlideSetBackgroundOperation {
     readonly fill: { readonly kind: 'solid'; readonly color: string } | null;
 }
 
+/**
+ * Edit operation that exchanges the identified slide with the slide currently
+ * at a zero-based position, leaving every other slide in place.
+ *
+ * `index` must be smaller than the slide count; swapping a slide with its own
+ * position is a no-op. An unknown slide answers with `object/not-found` and an
+ * out-of-range or missing index with `session/argument-invalid`.
+ */
+export interface SlideSwapOperation {
+    readonly op: 'slide.swap';
+    readonly slideId: SlideId;
+    readonly index: number;
+}
+
 /** Element operations of one slide. */
 export interface ElementsApi {
     addText(input: TextElementInput): Promise<Element>;
