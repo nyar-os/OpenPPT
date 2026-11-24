@@ -36,7 +36,15 @@ pub fn edit(deck: &mut Deck, request: &Value) -> Result<Value, ServiceError> {
             }
             Ok((state.results, state.resolved, state.deferred))
         })
-        .map_err(ServiceError::from)?;
+        .map_err(|error| {
+            let mapped = ServiceError::from(error);
+            // The conflict contract contrasts the committed revision against the one this script expected.
+            match expected {
+                Some(revision) if mapped.code() == codes::DECK_REVISION_CONFLICT =>
+                    mapped.with_param("expected", Value::from(revision)),
+                _ => mapped,
+            }
+        })?;
     apply_deferred(deck, deferred)?;
     Ok(json!({ "deck": summary(deck), "revision": deck.revision(), "results": results, "resolved": resolved }))
 }
@@ -371,6 +379,27 @@ struct EditState {
 impl EditState {
     fn apply(&mut self, draft: &mut DeckEdit, operation: &Value) -> Result<(), DeckError> {
         let name = operation.get("op").and_then(Value::as_str).ok_or_else(|| invalid("every operation needs an `op` name"))?;
+        // The upstream engine reports addressed-object failures without a locator, so the script layer
+        // resolves `slideId`/`elementId` first and fails with the typed not-found contract instead.
+        if let Some(value) = operation.get("slideId").filter(|value| !value.is_null()) {
+            let slide = self.slide_id_value(value)?;
+            let Some(model) = draft.document().slide(&slide) else {
+                return Err(missing_slide(&slide));
+            };
+            if let Some(element_value) = operation.get("elementId").filter(|value| !value.is_null()) {
+                let raw = element_value.as_str().ok_or_else(|| invalid("`elementId` must be a string"))?;
+                let element =
+                    ElementId::new(self.resolve_value(raw)?).ok_or_else(|| invalid("element identity must not be empty"))?;
+                if model.element(&element).is_none() {
+                    return Err(DeckError::new(
+                        codes::OBJECT_NOT_FOUND,
+                        format!("element `{element}` does not exist on slide `{slide}`"),
+                    )
+                    .with_slide(slide)
+                    .with_element(element));
+                }
+            }
+        }
         let created = match name {
             "deck.replaceText" => Some(self.replace_text(draft, operation)?),
             "deck.setTitle" => {

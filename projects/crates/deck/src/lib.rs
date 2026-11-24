@@ -25,7 +25,7 @@ use std::{
 use boost_fs::{OverwritePolicy, PublishOptions, publish_bytes_with_options};
 use data_encoding::representation::Base64;
 use document_presentation::authored::{
-    Deck, DeckCreateOptions, DeckError, DeckSize, InspectOptions, Severity, SlideAddOptions, decode_project, encode_project,
+    Deck, DeckCreateOptions, DeckError, DeckSize, InspectOptions, Severity, SlideAddOptions, codes, decode_project, encode_project,
 };
 use serde_json::{Map, Value, json};
 
@@ -67,6 +67,15 @@ impl ServiceError {
         self
     }
 
+    /// Adds one typed parameter, creating the payload object when the code carried none.
+    pub(crate) fn with_param(mut self, key: &str, value: Value) -> Self {
+        if !self.params.is_object() {
+            self.params = Value::Object(Map::new());
+        }
+        self.params.as_object_mut().expect("object").insert(key.to_owned(), value);
+        self
+    }
+
     fn source(mut self, error: impl std::error::Error + Send + Sync + 'static) -> Self {
         self.source = Some(Box::new(error));
         self
@@ -74,7 +83,9 @@ impl ServiceError {
 
     /// `session/argument-invalid`: a request parameter was rejected.
     pub fn argument(message: impl Into<String>) -> Self {
-        Self::build("session/argument-invalid", message)
+        let message = message.into();
+        let reason = message.clone();
+        Self::build("session/argument-invalid", message).with_params(json!({ "reason": reason }))
     }
 
     /// `object/not-found`: the addressed object is absent from the deck.
@@ -153,17 +164,37 @@ impl std::error::Error for ServiceError {
 
 impl From<DeckError> for ServiceError {
     fn from(error: DeckError) -> Self {
+        let code = error.code();
         let mut params = Map::new();
+        if code == codes::ARGUMENT_INVALID {
+            // The catalog renders the rejection reason, so the upstream prose travels as a typed parameter.
+            params.insert("reason".to_owned(), Value::from(error.message()));
+        }
         if let Some(revision) = error.revision() {
-            params.insert("revision".to_owned(), Value::from(revision));
+            // A conflict contrasts the committed revision against the one the edit expected.
+            let key = if code == codes::DECK_REVISION_CONFLICT { "actual" } else { "revision" };
+            params.insert(key.to_owned(), Value::from(revision));
         }
-        if let Some(slide_id) = error.slide_id() {
-            params.insert("slideId".to_owned(), Value::from(slide_id.as_str()));
+        if code == codes::OBJECT_NOT_FOUND {
+            // Not-found addresses the object as a kind/id pair, preferring the element.
+            if let Some(element_id) = error.element_id() {
+                params.insert("kind".to_owned(), Value::from("element"));
+                params.insert("id".to_owned(), Value::from(element_id.as_str()));
+            }
+            else if let Some(slide_id) = error.slide_id() {
+                params.insert("kind".to_owned(), Value::from("slide"));
+                params.insert("id".to_owned(), Value::from(slide_id.as_str()));
+            }
         }
-        if let Some(element_id) = error.element_id() {
-            params.insert("elementId".to_owned(), Value::from(element_id.as_str()));
+        else {
+            if let Some(slide_id) = error.slide_id() {
+                params.insert("slideId".to_owned(), Value::from(slide_id.as_str()));
+            }
+            if let Some(element_id) = error.element_id() {
+                params.insert("elementId".to_owned(), Value::from(element_id.as_str()));
+            }
         }
-        let mut mapped = Self::engine(error.code(), error.message());
+        let mut mapped = Self::engine(code, error.message());
         if !params.is_empty() {
             mapped = mapped.with_params(Value::Object(params));
         }

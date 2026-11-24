@@ -2363,3 +2363,47 @@ fn table_transpose_refuses_merges_non_tables_and_unknown_objects() {
     }
     assert_eq!(deck.revision(), revision, "failed requests leave the revision untouched");
 }
+
+#[test]
+fn edit_failures_carry_the_typed_params_the_catalog_renders() {
+    let (mut deck, slide) = background_deck();
+    let detail = slide_detail(&deck, &slide).expect("slide exists");
+    let _element = detail["elements"][0]["id"].as_str().expect("element id").to_owned();
+
+    // An unknown slide addresses the object with the kind/id pair the catalog renders.
+    let error =
+        edit(&mut deck, &json!({ "operations": [{ "op": "slide.setTitle", "slideId": "slide-missing", "text": "x" }] }))
+            .expect_err("a missing slide fails the script");
+    assert_eq!(error.code(), "object/not-found");
+    assert_eq!(error.params(), &json!({ "kind": "slide", "id": "slide-missing" }));
+
+    // An unknown element on a live slide still addresses the element itself.
+    let error = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "element.setText", "slideId": slide, "elementId": "element-missing", "text": "x" }] }),
+    )
+    .expect_err("a missing element fails the script");
+    assert_eq!(error.code(), "object/not-found");
+    assert_eq!(error.params(), &json!({ "kind": "element", "id": "element-missing" }));
+
+    // A revision conflict contrasts the committed revision against the one the script expected.
+    let revision = deck.revision();
+    let error = edit(
+        &mut deck,
+        &json!({ "expectedRevision": revision + 5, "operations": [{ "op": "deck.setTitle", "title": "Later" }] }),
+    )
+    .expect_err("a stale revision fails the script");
+    assert_eq!(error.code(), "deck/revision-conflict");
+    assert_eq!(error.params()["actual"], json!(revision));
+    assert_eq!(error.params()["expected"], json!(revision + 5));
+
+    // A rejected argument travels as the reason the catalog renders.
+    let error = edit(&mut deck, &json!({ "operations": [{ "op": "deck.setTitle", "title": "   " }] })).expect_err("a blank title fails");
+    assert_eq!(error.code(), "session/argument-invalid");
+    assert_eq!(error.params()["reason"], json!(error.message()));
+
+    // A script-layer rejection carries the same reason parameter.
+    let error = edit(&mut deck, &json!({ "operations": [] })).expect_err("an empty script fails");
+    assert_eq!(error.code(), "session/argument-invalid");
+    assert_eq!(error.params()["reason"], json!("an edit script needs at least one operation"));
+}
