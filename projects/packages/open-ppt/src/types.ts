@@ -406,13 +406,49 @@ export interface TableMoveColumnOperation {
     readonly index: number;
 }
 
+/**
+ * Edit operation that copies one zero-based table row and inserts the copy
+ * directly below it, keeping the cells, their styles and the row height.
+ *
+ * `row` must be smaller than the current row count and the operation reports
+ * the new row index. A table with any vertical merge answers with
+ * `session/argument-invalid` so spans cannot break, a non-table element with
+ * `object/type-mismatch`, and an unknown slide or element with
+ * `object/not-found`.
+ */
+export interface TableDuplicateRowOperation {
+    readonly op: 'table.duplicateRow';
+    readonly slideId: SlideId;
+    readonly elementId: ElementId;
+    readonly row: number;
+}
+
+/**
+ * Edit operation that copies one zero-based table column and inserts the copy
+ * directly to its right, keeping the cell in every row and the column width.
+ *
+ * `column` must be smaller than the current column count and the operation
+ * reports the new column index. A table with any horizontal merge answers with
+ * `session/argument-invalid` so spans cannot break, a non-table element with
+ * `object/type-mismatch`, and an unknown slide or element with
+ * `object/not-found`.
+ */
+export interface TableDuplicateColumnOperation {
+    readonly op: 'table.duplicateColumn';
+    readonly slideId: SlideId;
+    readonly elementId: ElementId;
+    readonly column: number;
+}
+
 /** Placement, stacking and table operations addressed to elements of one slide. */
 export type ElementOperation =
     | ElementReorderOperation
     | ElementDuplicateOperation
     | ElementAlignOperation
     | ElementDistributeOperation
-    | TableMoveColumnOperation;
+    | TableMoveColumnOperation
+    | TableDuplicateRowOperation
+    | TableDuplicateColumnOperation;
 
 /**
  * Edit operation that rebuilds one element as a new element at the end of the

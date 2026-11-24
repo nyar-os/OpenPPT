@@ -1993,6 +1993,43 @@ fn horizontally_merged_deck() -> (Deck, String, String) {
     (deck, slide.as_str().to_string(), table)
 }
 
+/// Builds one table whose first column starts with a cell spanning two rows.
+fn vertically_merged_deck() -> (Deck, String, String) {
+    let mut deck = Deck::create(DeckCreateOptions::default());
+    let mut table = String::new();
+    let slide = deck
+        .transaction(None, |edit| {
+            let slide = edit.add_slide(SlideAddOptions { layout: None, index: None })?;
+            table = edit
+                .add_table(
+                    &slide,
+                    TableElementInput {
+                        column_widths_emu: vec![1_270_000, 1_270_000],
+                        rows: vec![
+                            TableRow { height_emu: 508_000, cells: vec![TableCell::plain("A"), TableCell::plain("B")] },
+                            TableRow { height_emu: 508_000, cells: vec![TableCell::plain("1"), TableCell::plain("2")] },
+                        ],
+                        transform: Some(Transform::from_points(30.0, 160.0, 200.0, 60.0).unwrap()),
+                        alt: Some("merged grid".to_string()),
+                    },
+                )?
+                .as_str()
+                .to_string();
+            Ok(slide)
+        })
+        .expect("merged fixture builds");
+
+    let mut document = deck.document().clone();
+    let ElementContent::Table(table_content) = &mut document.slides[0].elements[0].content
+    else {
+        panic!("the fixture element is a table");
+    };
+    table_content.rows[1].cells.remove(0);
+    table_content.rows[0].cells[0].row_span = 2;
+    let deck = Deck::from_document(document).expect("the merged table validates");
+    (deck, slide.as_str().to_string(), table)
+}
+
 #[test]
 fn table_move_column_refuses_tables_with_horizontal_merges() {
     let (mut deck, slide, table) = horizontally_merged_deck();
@@ -2086,4 +2123,98 @@ fn table_columns_insert_and_delete_with_widths_and_guards() {
     edit(&mut errors, &json!({ "operations": [{ "op": "table.deleteColumn", "slideId": second, "elementId": table, "column": 0 }] }))
         .expect_err("a table keeps one column");
     assert_eq!(errors.revision(), before, "failed requests leave the revision untouched");
+}
+
+#[test]
+fn table_duplicate_row_copies_cells_styles_and_height() {
+    let (mut deck, _first, second) = replace_deck();
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let table = detail["elements"][1]["id"].as_str().expect("table id").to_owned();
+    let revision = deck.revision();
+
+    let report = edit(
+        &mut deck,
+        &json!({ "operations": [
+            { "op": "table.setCellStyle", "slideId": second, "elementId": table, "row": 0, "column": 0, "bold": true },
+            { "op": "table.duplicateRow", "slideId": second, "elementId": table, "row": 0 },
+        ] }),
+    )
+    .expect("duplicate the styled header row");
+    assert_eq!(report["revision"], revision + 1, "one script is one revision bump");
+    assert_eq!(report["results"][1], json!("1"), "the copy reports its new index");
+
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let rows = detail["elements"][1]["content"]["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[1]["cells"][0]["text"], json!("Revenue"));
+    assert_eq!(rows[1]["cells"][1]["text"], json!("Q4 revenue plan"));
+    assert_eq!(rows[1]["cells"][0]["style"]["bold"], json!(true), "the copy follows the row's current style");
+    assert_eq!(rows[1]["heightPt"], json!(30.0), "the copy keeps the row height");
+    assert_eq!(rows[2]["cells"][0]["text"], json!("Cost"), "the untouched row shifts down");
+}
+
+#[test]
+fn table_duplicate_column_copies_cells_and_width() {
+    let (mut deck, _first, second) = replace_deck();
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let table = detail["elements"][1]["id"].as_str().expect("table id").to_owned();
+    let revision = deck.revision();
+
+    let report = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "table.duplicateColumn", "slideId": second, "elementId": table, "column": 0 }] }),
+    )
+    .expect("duplicate the first column");
+    assert_eq!(report["revision"], revision + 1);
+    assert_eq!(report["results"][0], json!("1"), "the copy reports its new index");
+
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    assert_eq!(detail["elements"][1]["content"]["columnWidthsPt"], json!([100.0, 100.0, 100.0]), "the width is copied too");
+    let rows = detail["elements"][1]["content"]["rows"].as_array().expect("rows");
+    assert_eq!(rows[0]["cells"].as_array().expect("cells").len(), 3);
+    assert_eq!(rows[0]["cells"][0]["text"], json!("Revenue"));
+    assert_eq!(rows[0]["cells"][1]["text"], json!("Revenue"));
+    assert_eq!(rows[0]["cells"][2]["text"], json!("Q4 revenue plan"));
+    assert_eq!(rows[1]["cells"][1]["text"], json!("Cost"));
+    assert_eq!(rows[1]["cells"][2]["text"], json!("flat"));
+}
+
+#[test]
+fn table_duplicate_refuses_merges_and_bad_arguments() {
+    let (mut deck, slide, table) = vertically_merged_deck();
+    let revision = deck.revision();
+    let error = edit(&mut deck, &json!({ "operations": [{ "op": "table.duplicateRow", "slideId": slide, "elementId": table, "row": 0 }] }))
+        .expect_err("a vertical merge blocks row duplication");
+    assert_eq!(error.code, "session/argument-invalid");
+    assert!(error.message.contains("vertical merge"), "{}", error.message);
+
+    let (mut deck, slide, table) = horizontally_merged_deck();
+    let error = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "table.duplicateColumn", "slideId": slide, "elementId": table, "column": 0 }] }),
+    )
+    .expect_err("a horizontal merge blocks column duplication");
+    assert_eq!(error.code, "session/argument-invalid");
+    assert!(error.message.contains("horizontal merge"), "{}", error.message);
+    assert_eq!(deck.revision(), revision, "a refused duplication leaves the revision untouched");
+
+    let (mut deck, _first, second) = replace_deck();
+    let detail = slide_detail(&deck, &second).expect("slide exists");
+    let table = detail["elements"][1]["id"].as_str().expect("table id").to_owned();
+    let text_element = detail["elements"][0]["id"].as_str().expect("text id").to_owned();
+    let revision = deck.revision();
+    for (operation, code) in [
+        (json!({ "op": "table.duplicateRow", "slideId": second, "elementId": table, "row": 9 }), "session/argument-invalid"),
+        (json!({ "op": "table.duplicateRow", "slideId": second, "elementId": text_element, "row": 0 }), "object/type-mismatch"),
+        (json!({ "op": "table.duplicateRow", "slideId": "slide-missing", "elementId": table, "row": 0 }), "object/not-found"),
+        (json!({ "op": "table.duplicateRow", "slideId": second, "elementId": "element-missing", "row": 0 }), "object/not-found"),
+        (json!({ "op": "table.duplicateColumn", "slideId": second, "elementId": table, "column": 9 }), "session/argument-invalid"),
+        (json!({ "op": "table.duplicateColumn", "slideId": second, "elementId": text_element, "column": 0 }), "object/type-mismatch"),
+        (json!({ "op": "table.duplicateColumn", "slideId": "slide-missing", "elementId": table, "column": 0 }), "object/not-found"),
+        (json!({ "op": "table.duplicateColumn", "slideId": second, "elementId": "element-missing", "column": 0 }), "object/not-found"),
+    ] {
+        let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("invalid duplication");
+        assert_eq!(error.code, code, "{} reports the right code", operation["op"].as_str().expect("op name"));
+    }
+    assert_eq!(deck.revision(), revision, "failed requests leave the revision untouched");
 }

@@ -911,6 +911,37 @@ impl EditState {
                 self.queue_table_rows(slide, element, rows);
                 None
             }
+            "table.duplicateRow" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let row = required_usize(operation, "row")?;
+                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
+                let target = model.element(&element).ok_or_else(|| {
+                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
+                        .with_slide(slide.clone())
+                        .with_element(element.clone())
+                })?;
+                let ElementContent::Table(table) = &target.content
+                else {
+                    return Err(DeckError::new(
+                        codes::OBJECT_TYPE_MISMATCH,
+                        format!("element `{element}` is not a table; only tables carry rows"),
+                    )
+                    .with_slide(slide.clone())
+                    .with_element(element.clone()));
+                };
+                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
+                if row >= rows.len() {
+                    return Err(invalid(format!("`row` {row} is outside the table's {} rows", rows.len())));
+                }
+                if rows.iter().any(|candidate| candidate.cells.iter().any(|cell| cell.row_span > 1)) {
+                    return Err(invalid("row duplication needs a table without vertical merges"));
+                }
+                let copy = rows[row].clone();
+                rows.insert(row + 1, copy);
+                self.queue_table_rows(slide, element, rows);
+                Some((row + 1).to_string())
+            }
             "table.moveColumn" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
@@ -953,6 +984,45 @@ impl EditState {
                 self.queue_table_rows(slide.clone(), element.clone(), rows);
                 self.deferred.push(Deferred::SetColumnWidths { slide, element, widths });
                 None
+            }
+            "table.duplicateColumn" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let column = required_usize(operation, "column")?;
+                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
+                let target = model.element(&element).ok_or_else(|| {
+                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
+                        .with_slide(slide.clone())
+                        .with_element(element.clone())
+                })?;
+                let ElementContent::Table(table) = &target.content
+                else {
+                    return Err(DeckError::new(
+                        codes::OBJECT_TYPE_MISMATCH,
+                        format!("element `{element}` is not a table; only tables carry columns"),
+                    )
+                    .with_slide(slide.clone())
+                    .with_element(element.clone()));
+                };
+                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
+                let mut widths =
+                    Self::queued_widths(&self.deferred, &slide, &element).unwrap_or_else(|| table.column_widths_emu.clone());
+                let columns = widths.len();
+                if column >= columns {
+                    return Err(invalid(format!("`column` {column} is outside the table's {columns} columns")));
+                }
+                if rows.iter().any(|candidate| candidate.cells.iter().any(|cell| cell.column_span > 1)) {
+                    return Err(invalid("column duplication needs a table without horizontal merges"));
+                }
+                for candidate in &mut rows {
+                    let copy = candidate.cells[column].clone();
+                    candidate.cells.insert(column + 1, copy);
+                }
+                let width = widths[column];
+                widths.insert(column + 1, width);
+                self.queue_table_rows(slide.clone(), element.clone(), rows);
+                self.deferred.push(Deferred::SetColumnWidths { slide, element, widths });
+                Some((column + 1).to_string())
             }
             "table.insertColumn" => {
                 let slide = self.slide(operation)?;
