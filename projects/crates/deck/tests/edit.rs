@@ -1209,6 +1209,59 @@ fn slide_add_can_seed_a_title_and_notes() {
 }
 
 #[test]
+fn slide_append_notes_starts_and_extends_the_speaker_notes() {
+    let (mut deck, slide) = background_deck();
+    let revision = deck.revision();
+
+    let report = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "slide.appendNotes", "slideId": slide, "text": "  Open with the 18% lift.  " }] }),
+    )
+    .expect("the first append commits");
+    assert_eq!(report["results"][0], Value::Null, "an append reports no payload");
+    assert_eq!(slide_detail(&deck, &slide).expect("slide")["notes"], json!("Open with the 18% lift."), "the text is trimmed");
+
+    edit(&mut deck, &json!({ "operations": [{ "op": "slide.appendNotes", "slideId": slide, "text": "Then the regional plan." }] }))
+        .expect("the second append commits");
+    assert_eq!(
+        slide_detail(&deck, &slide).expect("slide")["notes"],
+        json!("Open with the 18% lift.\nThen the regional plan."),
+        "each append starts a new line"
+    );
+    assert_eq!(summary(&deck)["slides"][0]["notes"], json!("Open with the 18% lift.\nThen the regional plan."));
+
+    edit(&mut deck, &json!({ "operations": [{ "op": "slide.setNotes", "slideId": slide, "text": "Fresh" }] }))
+        .expect("a replace commits");
+    assert_eq!(slide_detail(&deck, &slide).expect("slide")["notes"], json!("Fresh"), "setNotes still replaces");
+    edit(&mut deck, &json!({ "operations": [{ "op": "slide.appendNotes", "slideId": slide, "text": "Second" }] }))
+        .expect("an append after a replace commits");
+    assert_eq!(slide_detail(&deck, &slide).expect("slide")["notes"], json!("Fresh\nSecond"));
+
+    assert_eq!(deck.revision(), revision + 4, "each script bumped the revision once");
+}
+
+#[test]
+fn slide_append_notes_refuses_blank_text_and_unknown_slides() {
+    let (mut deck, slide) = background_deck();
+    let revision = deck.revision();
+    for operation in [
+        json!({ "op": "slide.appendNotes", "slideId": slide, "text": "   " }),
+        json!({ "op": "slide.appendNotes", "slideId": slide }),
+        json!({ "op": "slide.appendNotes", "slideId": slide, "text": 5 }),
+        json!({ "op": "slide.appendNotes", "slideId": "slide-missing", "text": "x" }),
+    ] {
+        let error = edit(&mut deck, &json!({ "operations": [operation] })).expect_err("invalid append");
+        assert_eq!(
+            error.code,
+            if operation["slideId"] == json!("slide-missing") { "object/not-found" } else { "session/argument-invalid" },
+            "the failure reports the right code"
+        );
+    }
+    assert_eq!(deck.revision(), revision, "failed appends consume no revision");
+    assert_eq!(slide_detail(&deck, &slide).expect("slide")["notes"], Value::Null, "the notes stay unset");
+}
+
+#[test]
 fn deck_size_accepts_named_ratios_and_custom_points() {
     let (mut deck, _slide) = background_deck();
     let revision = deck.revision();

@@ -525,6 +525,20 @@ export interface SlideSwapOperation {
     readonly index: number;
 }
 
+/**
+ * Edit operation that trims `text` and appends it as a new final line to the
+ * slide's speaker notes, or sets it when the slide has no notes yet.
+ *
+ * A blank or missing `text` answers with `session/argument-invalid` and an
+ * unknown slide with `object/not-found`. Unlike `slide.setNotes` the existing
+ * notes are kept.
+ */
+export interface SlideAppendNotesOperation {
+    readonly op: 'slide.appendNotes';
+    readonly slideId: SlideId;
+    readonly text: string;
+}
+
 /** Element operations of one slide. */
 export interface ElementsApi {
     addText(input: TextElementInput): Promise<Element>;

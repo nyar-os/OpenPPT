@@ -469,6 +469,22 @@ impl EditState {
                 draft.set_slide_notes(&slide, optional_string(operation, "text")?)?;
                 None
             }
+            "slide.appendNotes" => {
+                let slide = self.slide(operation)?;
+                let text = required_str(operation, "text")?;
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    return Err(invalid("`slide.appendNotes` needs a non-empty `text`"));
+                }
+                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
+                let existing = model.notes.clone();
+                let notes = match existing.as_deref() {
+                    Some(existing) if !existing.trim().is_empty() => format!("{existing}\n{trimmed}"),
+                    _ => trimmed.to_owned(),
+                };
+                draft.set_slide_notes(&slide, Some(notes))?;
+                None
+            }
             "slide.setHidden" => {
                 let slide = self.slide(operation)?;
                 let hidden = operation
