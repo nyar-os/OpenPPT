@@ -25,9 +25,10 @@ pub fn outline(deck: &Deck, request: &Value) -> Result<Value, ServiceError> {
     let slides = deck
         .slides()
         .iter()
-        .enumerate()
-        .map(|(index, slide)| {
-            let title = slide.title();
+        .zip(deck.notes_outline())
+        .map(|(slide, entry)| {
+            let index = entry.index;
+            let title = entry.title;
             let mut points: Vec<String> = Vec::new();
             for element in &slide.elements {
                 if element.placeholder.as_ref().is_some_and(|placeholder| placeholder.name == "title") {
@@ -60,9 +61,9 @@ pub fn outline(deck: &Deck, request: &Value) -> Result<Value, ServiceError> {
                 "id": slide.id.as_str(),
                 "index": index,
                 "title": title,
-                "hidden": slide.hidden,
+                "hidden": entry.hidden,
                 "elements": slide.elements.len(),
-                "notes": slide.notes,
+                "notes": entry.notes,
                 "points": points,
             })
         })

@@ -10,9 +10,10 @@ use data_encoding::representation::Base64;
 
 use crate::base64_text;
 use document_presentation::authored::{
-    AssetId, ChartData, ChartElementInput, Deck, DeckEdit, DeckError, DeckSize, EMU_PER_POINT, Element, ElementContent, ElementId,
-    Fill, FormulaElementInput, ImageElementInput, LayoutId, Line, LockFlags, MediaKind, ShapeElementInput, SlideAddOptions, SlideId,
-    TableCell, TableElementInput, TableRow, TextAlign, TextContent, TextElementInput, Transform, codes,
+    AssetId, ChartData, ChartElementInput, Crop, Deck, DeckEdit, DeckError, DeckSize, EMU_PER_POINT, Element, ElementContent, ElementId,
+    Fill, FormulaElementInput, ImageDuplicateOptions, ImageElementInput, ImageMoveTarget, LayoutId, Line, LockFlags, MediaKind,
+    ShapeElementInput, SlideAddOptions, SlideId, TableCell, TableElementInput, TableRow, TextAlign, TextContent, TextElementInput,
+    Transform, codes,
 };
 use serde_json::{Value, json};
 
@@ -28,13 +29,14 @@ pub fn edit(deck: &mut Deck, request: &Value) -> Result<Value, ServiceError> {
     if operations.is_empty() {
         return Err(ServiceError::argument("an edit script needs at least one operation"));
     }
-    let (results, resolved, deferred) = deck
+    let (results, resolved, deferred, pruned) = deck
         .transaction(expected, |draft| {
-            let mut state = EditState { resolved: HashMap::new(), results: Vec::new(), deferred: Vec::new() };
+            let mut state =
+                EditState { resolved: HashMap::new(), results: Vec::new(), deferred: Vec::new(), pruned: Vec::new() };
             for operation in operations {
                 state.apply(draft, operation)?;
             }
-            Ok((state.results, state.resolved, state.deferred))
+            Ok((state.results, state.resolved, state.deferred, state.pruned))
         })
         .map_err(|error| {
             let mapped = ServiceError::from(error);
@@ -46,7 +48,12 @@ pub fn edit(deck: &mut Deck, request: &Value) -> Result<Value, ServiceError> {
             }
         })?;
     apply_deferred(deck, deferred)?;
-    Ok(json!({ "deck": summary(deck), "revision": deck.revision(), "results": results, "resolved": resolved }))
+    let mut report = json!({ "deck": summary(deck), "revision": deck.revision(), "results": results, "resolved": resolved });
+    if !pruned.is_empty() {
+        // `asset.prune` reports the recycled identities only when it removed any.
+        report["prunedAssets"] = Value::Array(pruned.into_iter().map(Value::String).collect());
+    }
+    Ok(report)
 }
 
 /// One edit the upstream draft API has no setter for.
@@ -60,7 +67,6 @@ enum Deferred {
     SwapSlides { first: SlideId, second: SlideId },
     Background { slide: SlideId, fill: Option<Fill> },
     TableRows { slide: SlideId, element: ElementId, rows: Vec<TableRow> },
-    RemoveAsset { asset: AssetId },
     SetLayout { slide: SlideId, layout: Option<LayoutId> },
     SetFill { slide: SlideId, element: ElementId, fill: Option<Fill> },
     SetLine { slide: SlideId, element: ElementId, line: Option<Line> },
@@ -128,7 +134,6 @@ fn apply_deferred(deck: &mut Deck, deferred: Vec<Deferred>) -> Result<(), Servic
             }
             Deferred::SetTitle { title } => document.title = title,
             Deferred::SetSize { size } => document.size = size,
-            Deferred::RemoveAsset { asset } => document.assets.retain(|candidate| candidate.id != asset),
             Deferred::SetLayout { slide, layout } => {
                 if let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide) {
                     model.layout = layout;
@@ -374,6 +379,7 @@ struct EditState {
     resolved: HashMap<String, String>,
     results: Vec<Option<String>>,
     deferred: Vec<Deferred>,
+    pruned: Vec<String>,
 }
 
 impl EditState {
@@ -505,13 +511,12 @@ impl EditState {
                 if trimmed.is_empty() {
                     return Err(invalid("`slide.appendNotes` needs a non-empty `text`"));
                 }
-                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
-                let existing = model.notes.clone();
-                let notes = match existing.as_deref() {
-                    Some(existing) if !existing.trim().is_empty() => format!("{existing}\n{trimmed}"),
-                    _ => trimmed.to_owned(),
-                };
-                draft.set_slide_notes(&slide, Some(notes))?;
+                draft.append_slide_notes(&slide, trimmed)?;
+                None
+            }
+            "slide.clearNotes" => {
+                let slide = self.slide(operation)?;
+                draft.clear_slide_notes(&slide)?;
                 None
             }
             "slide.setHidden" => {
@@ -579,6 +584,41 @@ impl EditState {
                     },
                 )?;
                 Some(created.as_str().to_string())
+            }
+            "image.replace" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let asset = self.asset(draft, operation)?;
+                let replaced = draft.replace_image_asset(&slide, &element, asset).map_err(asset_error)?;
+                Some(replaced.as_str().to_string())
+            }
+            "image.setCrop" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let crop = match required(operation, "crop")? {
+                    Value::Null => None,
+                    Value::Object(_) => Some(parse_crop(operation.get("crop").expect("the crop value was read above"))?),
+                    _ => return Err(invalid("`crop` must be an object of fractions or null")),
+                };
+                draft.set_image_crop(&slide, &element, crop)?;
+                None
+            }
+            "image.move" => {
+                let slide = self.slide(operation)?;
+                let element = self.element(operation)?;
+                let target = match operation.get("targetSlideId") {
+                    Some(value) => self.slide_id_value(value)?,
+                    None => slide.clone(),
+                };
+                if draft.document().slide(&target).is_none() {
+                    return Err(missing_slide(&target));
+                }
+                let landing = draft.move_image(
+                    &slide,
+                    &element,
+                    ImageMoveTarget { slide: target, index: optional_usize(operation, "index")? },
+                )?;
+                Some(landing.to_string())
             }
             "shape.add" => {
                 let slide = self.slide(operation)?;
@@ -1354,6 +1394,11 @@ impl EditState {
                 self.remove_asset(draft, operation)?;
                 None
             }
+            "asset.prune" => {
+                let removed = draft.prune_assets();
+                self.pruned.extend(removed.iter().map(|asset| asset.as_str().to_string()));
+                None
+            }
             other => return Err(DeckError::new(codes::OBJECT_UNSUPPORTED, format!("operation `{other}` is not editable yet"))),
         };
         if let Some(id) = &created
@@ -1490,41 +1535,22 @@ fn queued_widths(deferred: &[Deferred], slide: &SlideId, element: &ElementId) ->
 
     /// Drops an embedded asset that no element references any more.
     ///
-    /// The draft checks existence and usage; the removal itself joins the
-    /// deferred list because the upstream editor has no asset setter.
+    /// The upstream draft checks existence and usage inside the transaction; the
+    /// asset codes are mapped onto the stable not-found/unsupported contract
+    /// this script surface already promises.
     fn remove_asset(&mut self, draft: &mut DeckEdit, operation: &Value) -> Result<(), DeckError> {
         let value = self.resolve_value(required_str(operation, "assetId")?)?;
         let asset = AssetId::new(value).ok_or_else(|| invalid("asset identity must not be empty"))?;
-        let document = draft.document();
-        if !document.assets.iter().any(|candidate| candidate.id == asset) {
-            return Err(DeckError::new(codes::OBJECT_NOT_FOUND, format!("asset `{asset}` does not exist")));
-        }
-        let users = document
-            .slides
-            .iter()
-            .flat_map(|model| model.elements.iter())
-            .filter(|element| match &element.content {
-                ElementContent::Image(image) => image.asset == asset,
-                ElementContent::Media(media) => media.asset == asset,
-                _ => false,
-            })
-            .count();
-        if users > 0 {
-            return Err(DeckError::new(
-                codes::OBJECT_UNSUPPORTED,
-                format!("asset `{asset}` is still used by {users} element(s); remove them first"),
-            ));
-        }
-        self.deferred.push(Deferred::RemoveAsset { asset });
-        Ok(())
+        draft.remove_asset(&asset).map_err(asset_error)
     }
 
     /// Rebuilds the source content as a new element at the end of the slide.
     ///
-    /// `targetSlideId` may name another slide; the rebuilt element keeps the
-    /// source transform plus any offset. Only content the public `add_*` inputs
-    /// can express is duplicated, so an element that would lose crop,
-    /// placeholder or alt data is refused instead of being copied partially.
+    /// `targetSlideId` may name another slide; the copy keeps the source
+    /// transform plus any offset. Images go through the upstream image copier,
+    /// which keeps crop, alt and lock and shares the asset record. The other
+    /// kinds are rebuilt through the public `add_*` inputs, so an element that
+    /// would lose placeholder data is refused instead of copied partially.
     fn duplicate_element(&mut self, draft: &mut DeckEdit, operation: &Value) -> Result<String, DeckError> {
         let slide = self.slide(operation)?;
         let element = self.element(operation)?;
@@ -1543,9 +1569,11 @@ fn queued_widths(deferred: &[Deferred], slide: &SlideId, element: &ElementId) ->
                     .with_element(element.clone())
             })?
         };
+        let offset_x = offset_emu(operation, "offsetXPt")?;
+        let offset_y = offset_emu(operation, "offsetYPt")?;
         let mut transform = source.transform;
-        transform.x_emu = transform.x_emu.saturating_add(offset_emu(operation, "offsetXPt")?);
-        transform.y_emu = transform.y_emu.saturating_add(offset_emu(operation, "offsetYPt")?);
+        transform.x_emu = transform.x_emu.saturating_add(offset_x);
+        transform.y_emu = transform.y_emu.saturating_add(offset_y);
         let created = match &source.content {
             ElementContent::Text(text) => {
                 if source.placeholder.is_some() {
@@ -1565,19 +1593,15 @@ fn queued_widths(deferred: &[Deferred], slide: &SlideId, element: &ElementId) ->
                     },
                 )?
             }
-            ElementContent::Image(image) => {
-                if image.crop.is_some() {
-                    return Err(unsupported_element(&slide, &element, "cropped images cannot be rebuilt through `image.add`"));
-                }
-                let alt = source.alt.clone().filter(|alt| !alt.trim().is_empty()).ok_or_else(|| {
-                    unsupported_element(
-                        &slide,
-                        &element,
-                        "images without alternative text cannot be rebuilt through `image.add`",
-                    )
-                })?;
-                draft.add_image(&target, ImageElementInput { asset: image.asset.clone(), transform: Some(transform), alt })?
-            }
+            ElementContent::Image(_) => draft.duplicate_image(
+                &slide,
+                &element,
+                ImageDuplicateOptions {
+                    target_slide: (target != slide).then(|| target.clone()),
+                    offset_x_emu: Some(offset_x),
+                    offset_y_emu: Some(offset_y),
+                },
+            )?,
             ElementContent::Shape(shape) => draft.add_shape(
                 &target,
                 ShapeElementInput {
@@ -2193,6 +2217,35 @@ fn unsupported_element(slide: &SlideId, element: &ElementId, reason: &str) -> De
     DeckError::new(codes::OBJECT_UNSUPPORTED, format!("element `{element}` cannot be duplicated: {reason}"))
         .with_slide(slide.clone())
         .with_element(element.clone())
+}
+
+/// Maps the upstream asset codes onto the stable codes of this script surface.
+fn asset_error(error: DeckError) -> DeckError {
+    match error.code() {
+        codes::ASSET_MISSING => DeckError::new(codes::OBJECT_NOT_FOUND, error.message().to_string()),
+        codes::ASSET_IN_USE => {
+            let mut mapped = DeckError::new(codes::OBJECT_UNSUPPORTED, error.message().to_string());
+            if let Some(slide) = error.slide_id() {
+                mapped = mapped.with_slide(slide.clone());
+            }
+            if let Some(element) = error.element_id() {
+                mapped = mapped.with_element(element.clone());
+            }
+            mapped
+        }
+        _ => error,
+    }
+}
+
+/// Reads the four crop fractions; the upstream setter validates their range.
+fn parse_crop(value: &Value) -> Result<Crop, DeckError> {
+    let fraction = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_f64)
+            .ok_or_else(|| invalid(format!("`crop.{key}` must be a number between 0 and 1")))
+    };
+    Ok(Crop { left: fraction("left")?, top: fraction("top")?, right: fraction("right")?, bottom: fraction("bottom")? })
 }
 
 fn element_frames(draft: &DeckEdit, slide: &SlideId, elements: &[ElementId]) -> Result<Vec<Transform>, DeckError> {

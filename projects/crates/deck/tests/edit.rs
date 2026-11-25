@@ -1,8 +1,9 @@
 //! Integration tests for the deck editing surface.
 
 use document_presentation::authored::{
-    ChartData, ChartElementInput, ChartSeries, ChartType, Deck, DeckCreateOptions, ElementContent, Fill, ImageElementInput,
-    Line, ShapeElementInput, SlideAddOptions, TableCell, TableElementInput, TableRow, TextContent, TextElementInput, Transform,
+    ChartData, ChartElementInput, ChartSeries, ChartType, Crop, Deck, DeckCreateOptions, EMU_PER_POINT, ElementContent, Fill,
+    ImageElementInput, Line, ShapeElementInput, SlideAddOptions, TableCell, TableElementInput, TableRow, TextContent, TextElementInput,
+    Transform,
 };
 use open_ppt_deck::edit::{edit, slide_detail};
 use open_ppt_deck::summary;
@@ -2406,4 +2407,284 @@ fn edit_failures_carry_the_typed_params_the_catalog_renders() {
     let error = edit(&mut deck, &json!({ "operations": [] })).expect_err("an empty script fails");
     assert_eq!(error.code(), "session/argument-invalid");
     assert_eq!(error.params()["reason"], json!("an edit script needs at least one operation"));
+}
+
+#[test]
+fn image_replace_swaps_the_asset_and_prune_recycles_the_old_one() {
+    let (mut deck, used, free) = asset_deck();
+    let slide = deck.document().slides[0].id.as_str().to_string();
+    let image = element_ids(&deck, &slide)[0].clone();
+    let revision = deck.revision();
+
+    let report = edit(
+        &mut deck,
+        &json!({
+            "operations": [
+                { "op": "asset.add", "as": "$tx:fresh", "name": "fresh.png", "mediaType": "image/png", "base64": "ZnJlc2g=" },
+                { "op": "image.replace", "slideId": slide, "elementId": image, "assetId": "$tx:fresh" },
+                { "op": "asset.prune" },
+            ],
+        }),
+    )
+    .expect("the swap and the recycle commit together");
+    let fresh = report["resolved"]["$tx:fresh"].as_str().expect("fresh asset id").to_string();
+
+    assert_eq!(report["results"][1], used, "the swap reports the replaced asset");
+    assert_eq!(report["prunedAssets"], json!([used, free]), "the orphan joins the already unused asset");
+    assert_eq!(report["revision"], revision + 1, "one script bumps one revision");
+    let detail = slide_detail(&deck, &slide).expect("slide exists");
+    assert_eq!(element_entry(&detail, &image)["content"]["assetId"], fresh, "the placement points at the new bytes");
+    assert_eq!(asset_ids(&deck), vec![fresh], "only the fresh asset survives");
+}
+
+#[test]
+fn image_replace_refuses_unknown_assets_and_non_images() {
+    let (mut deck, _used, _free) = asset_deck();
+    let slide = deck.document().slides[0].id.as_str().to_string();
+    let image = element_ids(&deck, &slide)[0].clone();
+    let revision = deck.revision();
+
+    let error = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "image.replace", "slideId": slide, "elementId": image, "assetId": "asset-missing" }] }),
+    )
+    .expect_err("an unknown asset is refused");
+    assert_eq!(error.code(), "object/not-found");
+
+    let (mut text_deck, text_slide) = background_deck();
+    let text = element_ids(&text_deck, &text_slide)[0].clone();
+    let error = edit(
+        &mut text_deck,
+        &json!({
+            "operations": [{
+                "op": "image.replace", "slideId": text_slide, "elementId": text,
+                "asset": { "name": "x.png", "mediaType": "image/png", "base64": "eA==" },
+            }],
+        }),
+    )
+    .expect_err("a text element is not an image");
+    assert_eq!(error.code(), "object/type-mismatch");
+
+    assert_eq!(deck.revision(), revision, "a failed swap consumes no revision");
+    assert_eq!(asset_ids(&deck).len(), 2, "both assets survive the failed swap");
+}
+
+#[test]
+fn image_set_crop_applies_validates_and_clears() {
+    let (mut deck, _used, _free) = asset_deck();
+    let slide = deck.document().slides[0].id.as_str().to_string();
+    let image = element_ids(&deck, &slide)[0].clone();
+
+    edit(
+        &mut deck,
+        &json!({
+            "operations": [{
+                "op": "image.setCrop", "slideId": slide, "elementId": image,
+                "crop": { "left": 0.1, "top": 0.2, "right": 0.3, "bottom": 0.4 },
+            }],
+        }),
+    )
+    .expect("a valid crop commits");
+    let ElementContent::Image(content) = &deck.document().slides[0].elements[0].content else {
+        panic!("the deck places an image");
+    };
+    assert_eq!(content.crop, Some(Crop { left: 0.1, top: 0.2, right: 0.3, bottom: 0.4 }));
+
+    for crop in [
+        json!({ "left": 2.0, "top": 0.0, "right": 0.0, "bottom": 0.0 }),
+        json!({ "left": 0.6, "top": 0.0, "right": 0.5, "bottom": 0.0 }),
+        json!({ "left": 0.0, "top": 0.7, "right": 0.0, "bottom": 0.4 }),
+        json!({ "left": 0.1, "top": 0.1, "right": 0.1 }),
+        json!({ "left": "a", "top": 0.0, "right": 0.0, "bottom": 0.0 }),
+        json!(5),
+    ] {
+        let error = edit(
+            &mut deck,
+            &json!({ "operations": [{ "op": "image.setCrop", "slideId": slide, "elementId": image, "crop": crop }] }),
+        )
+        .expect_err("an unusable crop is refused");
+        assert_eq!(error.code(), "session/argument-invalid");
+    }
+    let ElementContent::Image(content) = &deck.document().slides[0].elements[0].content else {
+        panic!("the deck places an image");
+    };
+    assert_eq!(content.crop, Some(Crop { left: 0.1, top: 0.2, right: 0.3, bottom: 0.4 }), "refused crops keep the last value");
+
+    edit(&mut deck, &json!({ "operations": [{ "op": "image.setCrop", "slideId": slide, "elementId": image, "crop": null }] }))
+        .expect("a null crop clears the box");
+    let ElementContent::Image(content) = &deck.document().slides[0].elements[0].content else {
+        panic!("the deck places an image");
+    };
+    assert_eq!(content.crop, None, "the crop is cleared");
+}
+
+#[test]
+fn image_set_crop_refuses_non_images_and_missing_arguments() {
+    let (mut deck, slide) = background_deck();
+    let text = element_ids(&deck, &slide)[0].clone();
+    let revision = deck.revision();
+
+    let error = edit(
+        &mut deck,
+        &json!({
+            "operations": [{
+                "op": "image.setCrop", "slideId": slide, "elementId": text,
+                "crop": { "left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0 },
+            }],
+        }),
+    )
+    .expect_err("a text element cannot carry a crop");
+    assert_eq!(error.code(), "object/type-mismatch");
+
+    let error = edit(&mut deck, &json!({ "operations": [{ "op": "image.setCrop", "slideId": slide, "elementId": text }] }))
+        .expect_err("a missing crop is refused");
+    assert_eq!(error.code(), "session/argument-invalid");
+    assert_eq!(deck.revision(), revision, "failed crops consume no revision");
+}
+
+#[test]
+fn element_duplicate_copies_a_cropped_image_faithfully() {
+    let (mut deck, used, _free) = asset_deck();
+    let slide = deck.document().slides[0].id.as_str().to_string();
+    let image = element_ids(&deck, &slide)[0].clone();
+    edit(
+        &mut deck,
+        &json!({
+            "operations": [{
+                "op": "image.setCrop", "slideId": slide, "elementId": image,
+                "crop": { "left": 0.25, "top": 0.0, "right": 0.0, "bottom": 0.5 },
+            }],
+        }),
+    )
+    .expect("the crop commits");
+
+    let report = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "element.duplicate", "slideId": slide, "elementId": image, "offsetXPt": 6.0, "offsetYPt": 4.0 }] }),
+    )
+    .expect("a cropped image duplicates");
+    let copy = report["results"][0].as_str().expect("the duplicate reports its id").to_string();
+
+    let elements = &deck.document().slides[0].elements;
+    let source = elements.iter().find(|candidate| candidate.id.as_str() == image).expect("source exists");
+    let copy_element = elements.iter().find(|candidate| candidate.id.as_str() == copy).expect("copy exists");
+    assert_eq!(elements.last().expect("elements").id.as_str(), copy.as_str(), "the copy lands last");
+    let ElementContent::Image(source_image) = &source.content else { panic!("source is an image") };
+    let ElementContent::Image(copy_image) = &copy_element.content else { panic!("copy is an image") };
+    assert_eq!(copy_image.asset.as_str(), used, "the copy shares the asset record");
+    assert_eq!(copy_image.crop, source_image.crop, "the crop travels with the copy");
+    assert_eq!(copy_element.alt, source.alt, "the alternative text travels with the copy");
+    assert_eq!(copy_element.transform.x_emu - source.transform.x_emu, (6.0 * EMU_PER_POINT as f64).round() as i64);
+    assert_eq!(copy_element.transform.y_emu - source.transform.y_emu, (4.0 * EMU_PER_POINT as f64).round() as i64);
+}
+
+#[test]
+fn image_move_repositions_within_and_across_slides() {
+    let (mut deck, slide) = background_deck();
+    let text = element_ids(&deck, &slide)[0].clone();
+    let report = edit(
+        &mut deck,
+        &json!({
+            "operations": [
+                { "op": "slide.add", "as": "$tx:target" },
+                { "op": "asset.add", "as": "$tx:pic", "name": "pic.png", "mediaType": "image/png", "base64": "cGlj" },
+                { "op": "image.add", "slideId": slide, "assetId": "$tx:pic", "alt": "One", "as": "$tx:first" },
+                { "op": "image.add", "slideId": slide, "assetId": "$tx:pic", "alt": "Two", "as": "$tx:second" },
+            ],
+        }),
+    )
+    .expect("the image pair builds");
+    let target = report["resolved"]["$tx:target"].as_str().expect("target slide id").to_string();
+    let first = report["resolved"]["$tx:first"].as_str().expect("first image id").to_string();
+    let second_image = report["resolved"]["$tx:second"].as_str().expect("second image id").to_string();
+
+    let report = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "image.move", "slideId": slide, "elementId": first, "targetSlideId": target, "index": 0 }] }),
+    )
+    .expect("the cross-slide move commits");
+    assert_eq!(report["results"][0], "0", "the move reports the landing index");
+    assert_eq!(element_ids(&deck, &target), vec![first.clone()], "the image lands on the target slide");
+
+    let report = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "image.move", "slideId": slide, "elementId": second_image, "index": 0 }] }),
+    )
+    .expect("a same-slide reorder commits");
+    assert_eq!(report["results"][0], "0", "the reorder reports the landing index");
+    assert_eq!(element_ids(&deck, &slide), vec![second_image.clone(), text.clone()], "the image moved in front of the text");
+
+    let report = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "image.move", "slideId": slide, "elementId": second_image, "index": 40 }] }),
+    )
+    .expect("an oversized index clamps");
+    assert_eq!(report["results"][0], "1", "the image lands after the text");
+    assert_eq!(element_ids(&deck, &slide), vec![text.clone(), second_image.clone()]);
+
+    let report = edit(&mut deck, &json!({ "operations": [{ "op": "image.move", "slideId": slide, "elementId": second_image }] }))
+        .expect("an index-less move appends");
+    assert_eq!(report["results"][0], "1", "the append reports its landing index");
+    assert_eq!(element_ids(&deck, &slide), vec![text, second_image]);
+}
+
+#[test]
+fn image_move_refuses_unknown_targets_and_non_images() {
+    let (mut deck, slide) = background_deck();
+    let text = element_ids(&deck, &slide)[0].clone();
+    let revision = deck.revision();
+
+    let error = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "image.move", "slideId": slide, "elementId": text, "index": 0 }] }),
+    )
+    .expect_err("a text element is not an image");
+    assert_eq!(error.code(), "object/type-mismatch");
+
+    let error = edit(
+        &mut deck,
+        &json!({ "operations": [{ "op": "image.move", "slideId": slide, "elementId": text, "targetSlideId": "slide-missing" }] }),
+    )
+    .expect_err("an unknown target slide is refused");
+    assert_eq!(error.code(), "object/not-found");
+
+    assert_eq!(deck.revision(), revision, "failed moves consume no revision");
+    assert_eq!(element_ids(&deck, &slide), vec![text], "the slide is unchanged");
+}
+
+#[test]
+fn asset_prune_recycles_only_unreferenced_assets() {
+    let (mut deck, used, free) = asset_deck();
+    let revision = deck.revision();
+    let report = edit(&mut deck, &json!({ "operations": [{ "op": "asset.prune" }] })).expect("the prune commits");
+
+    assert!(report["results"][0].is_null(), "a prune creates no object");
+    assert_eq!(report["prunedAssets"], json!([free]), "the unused asset is reported");
+    assert_eq!(report["revision"], revision + 1, "one script bumps one revision");
+    assert_eq!(asset_ids(&deck), vec![used], "the referenced asset stays");
+
+    let report = edit(&mut deck, &json!({ "operations": [{ "op": "asset.prune" }] })).expect("an empty prune commits");
+    assert!(report.get("prunedAssets").is_none(), "a prune that removed nothing reports no field");
+}
+
+#[test]
+fn slide_clear_notes_empties_the_speaker_notes() {
+    let (mut deck, slide) = background_deck();
+    edit(&mut deck, &json!({ "operations": [{ "op": "slide.appendNotes", "slideId": slide, "text": "Remember the ask." }] }))
+        .expect("the append commits");
+    assert_eq!(slide_detail(&deck, &slide).expect("slide")["notes"], json!("Remember the ask."));
+
+    let report = edit(&mut deck, &json!({ "operations": [{ "op": "slide.clearNotes", "slideId": slide }] }))
+        .expect("the clear commits");
+    assert!(report["results"][0].is_null(), "a clear reports no payload");
+    assert!(slide_detail(&deck, &slide).expect("slide")["notes"].is_null(), "the notes are gone");
+    assert!(summary(&deck)["slides"][0]["notes"].is_null(), "the summary sees no notes");
+    let outline = open_ppt_deck::outline::outline(&deck, &json!({})).expect("outline projects");
+    assert!(outline["slides"][0]["notes"].is_null(), "the outline sees no notes");
+
+    edit(&mut deck, &json!({ "operations": [{ "op": "slide.clearNotes", "slideId": slide }] })).expect("clearing twice is fine");
+
+    let error = edit(&mut deck, &json!({ "operations": [{ "op": "slide.clearNotes", "slideId": "slide-missing" }] }))
+        .expect_err("an unknown slide is refused");
+    assert_eq!(error.code(), "object/not-found");
 }
