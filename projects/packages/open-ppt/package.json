@@ -1,6 +1,6 @@
 {
     "name": "@wae/open-ppt",
-    "version": "0.0.1",
+    "version": "0.0.2",
     "description": "Editable presentation decks: playback, visual editing and agent authoring on one deck model",
     "license": "Apache-2.0",
     "type": "module",
