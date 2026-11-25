@@ -64,11 +64,7 @@ pub fn edit(deck: &mut Deck, request: &Value) -> Result<Value, ServiceError> {
 /// cloned, changed and rebuilt so a failure in the closure still consumes no
 /// revision.
 enum Deferred {
-    MoveSlide { slide: SlideId, index: usize },
-    SwapSlides { first: SlideId, second: SlideId },
-    Background { slide: SlideId, fill: Option<Fill> },
     TableRows { slide: SlideId, element: ElementId, rows: Vec<TableRow> },
-    SetLayout { slide: SlideId, layout: Option<LayoutId> },
     SetFill { slide: SlideId, element: ElementId, fill: Option<Fill> },
     SetLine { slide: SlideId, element: ElementId, line: Option<Line> },
     SetColumnWidths { slide: SlideId, element: ElementId, widths: Vec<i64> },
@@ -88,26 +84,6 @@ fn apply_deferred(deck: &mut Deck, deferred: Vec<Deferred>) -> Result<(), Servic
     let mut document = deck.document().clone();
     for operation in deferred {
         match operation {
-            Deferred::MoveSlide { slide, index } => {
-                let Some(position) = document.slides.iter().position(|candidate| candidate.id == slide)
-                else {
-                    continue;
-                };
-                let moved = document.slides.remove(position);
-                document.slides.insert(index.min(document.slides.len()), moved);
-            }
-            Deferred::SwapSlides { first, second } => {
-                let from = document.slides.iter().position(|candidate| candidate.id == first);
-                let to = document.slides.iter().position(|candidate| candidate.id == second);
-                if let (Some(from), Some(to)) = (from, to) {
-                    document.slides.swap(from, to);
-                }
-            }
-            Deferred::Background { slide, fill } => {
-                if let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide) {
-                    model.background = fill;
-                }
-            }
             Deferred::TableRows { slide, element, rows } => {
                 let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide)
                 else {
@@ -123,11 +99,6 @@ fn apply_deferred(deck: &mut Deck, deferred: Vec<Deferred>) -> Result<(), Servic
             }
             Deferred::SetTitle { title } => document.title = title,
             Deferred::SetSize { size } => document.size = size,
-            Deferred::SetLayout { slide, layout } => {
-                if let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide) {
-                    model.layout = layout;
-                }
-            }
             Deferred::SetFill { slide, element, fill } => {
                 let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide)
                 else {
@@ -452,30 +423,22 @@ impl EditState {
             "slide.move" => {
                 let slide = self.slide(operation)?;
                 let index = required_usize(operation, "index")?;
-                if draft.document().slide(&slide).is_none() {
-                    return Err(
-                        DeckError::new(codes::OBJECT_NOT_FOUND, format!("slide `{slide}` does not exist")).with_slide(slide)
-                    );
-                }
                 let slides = draft.document().slides.len();
                 if index >= slides {
                     return Err(invalid(format!("`index` must be below {slides} for this deck")));
                 }
-                self.deferred.push(Deferred::MoveSlide { slide, index });
+                draft.move_slide(&slide, index)?;
                 None
             }
             "slide.swap" => {
                 let slide = self.slide(operation)?;
                 let index = required_usize(operation, "index")?;
-                if draft.document().slide(&slide).is_none() {
-                    return Err(missing_slide(&slide));
-                }
                 let slides = draft.document().slides.len();
                 if index >= slides {
                     return Err(invalid(format!("`index` must be below {slides} for this deck")));
                 }
                 let other = draft.document().slides[index].id.clone();
-                self.deferred.push(Deferred::SwapSlides { first: slide, second: other });
+                draft.swap_slides(&slide, &other)?;
                 None
             }
             "slide.duplicate" => {
@@ -520,32 +483,20 @@ impl EditState {
             "slide.setBackground" => {
                 let slide = self.slide(operation)?;
                 let fill = background_fill(required(operation, "fill")?)?;
-                if draft.document().slide(&slide).is_none() {
-                    return Err(
-                        DeckError::new(codes::OBJECT_NOT_FOUND, format!("slide `{slide}` does not exist")).with_slide(slide)
-                    );
-                }
-                self.deferred.push(Deferred::Background { slide, fill });
+                draft.set_slide_background(&slide, fill)?;
                 None
             }
             "slide.setLayout" => {
                 let slide = self.slide(operation)?;
-                if draft.document().slide(&slide).is_none() {
-                    return Err(missing_slide(&slide));
-                }
                 let layout = match required(operation, "layout")? {
                     Value::Null => None,
                     Value::String(raw) => {
                         let resolved = self.resolve_value(raw)?;
-                        let layout = LayoutId::new(resolved).ok_or_else(|| invalid("layout identity must not be empty"))?;
-                        if !draft.document().layouts.iter().any(|candidate| candidate.id == layout) {
-                            return Err(DeckError::new(codes::OBJECT_NOT_FOUND, format!("layout `{layout}` does not exist")));
-                        }
-                        Some(layout)
+                        Some(LayoutId::new(resolved).ok_or_else(|| invalid("layout identity must not be empty"))?)
                     }
                     _ => return Err(invalid("`layout` must be a layout id string or null")),
                 };
-                self.deferred.push(Deferred::SetLayout { slide, layout });
+                draft.set_slide_layout(&slide, layout)?;
                 None
             }
             "text.add" => {
