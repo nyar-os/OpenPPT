@@ -13,8 +13,8 @@ use document_presentation::authored::{
     AlignEdge, AlignReference, AssetId, ChartData, ChartElementInput, Crop, Deck, DeckEdit, DeckError, DeckSize,
     DistributeAxis, EMU_PER_POINT, Element, ElementContent, ElementId, ElementZOrder, Fill, FormulaElementInput,
     ImageDuplicateOptions, ImageElementInput, ImageMoveTarget, LayoutId, Line, LockFlags, MediaKind, ShapeElementInput,
-    SlideAddOptions, SlideId, TableCell, TableElementInput, TableRow, TextAlign, TextContent, TextElementInput,
-    TextReplaceOptions, TextRunStyle, Transform, codes,
+    SlideAddOptions, SlideId, TableCell, TableColumnInsertInput, TableElementInput, TableRow, TableRowInsertInput, TextAlign,
+    TextContent, TextElementInput, TextReplaceOptions, TextRunStyle, Transform, codes,
 };
 use serde_json::{Value, json};
 
@@ -30,14 +30,13 @@ pub fn edit(deck: &mut Deck, request: &Value) -> Result<Value, ServiceError> {
     if operations.is_empty() {
         return Err(ServiceError::argument("an edit script needs at least one operation"));
     }
-    let (results, resolved, deferred, pruned) = deck
+    let (results, resolved, pruned) = deck
         .transaction(expected, |draft| {
-            let mut state =
-                EditState { resolved: HashMap::new(), results: Vec::new(), deferred: Vec::new(), pruned: Vec::new() };
+            let mut state = EditState { resolved: HashMap::new(), results: Vec::new(), pruned: Vec::new() };
             for operation in operations {
                 state.apply(draft, operation)?;
             }
-            Ok((state.results, state.resolved, state.deferred, state.pruned))
+            Ok((state.results, state.resolved, state.pruned))
         })
         .map_err(|error| {
             let mapped = ServiceError::from(error);
@@ -49,114 +48,12 @@ pub fn edit(deck: &mut Deck, request: &Value) -> Result<Value, ServiceError> {
                 _ => mapped,
             }
         })?;
-    apply_deferred(deck, deferred)?;
     let mut report = json!({ "deck": summary(deck), "revision": deck.revision(), "results": results, "resolved": resolved });
     if !pruned.is_empty() {
         // `asset.prune` reports the recycled identities only when it removed any.
         report["prunedAssets"] = Value::Array(pruned.into_iter().map(Value::String).collect());
     }
     Ok(report)
-}
-
-/// One edit the upstream draft API has no setter for.
-///
-/// The draft is validated while the transaction runs; the document is then
-/// cloned, changed and rebuilt so a failure in the closure still consumes no
-/// revision.
-enum Deferred {
-    TableRows { slide: SlideId, element: ElementId, rows: Vec<TableRow> },
-    SetFill { slide: SlideId, element: ElementId, fill: Option<Fill> },
-    SetLine { slide: SlideId, element: ElementId, line: Option<Line> },
-    SetColumnWidths { slide: SlideId, element: ElementId, widths: Vec<i64> },
-    SetRowHeights { slide: SlideId, element: ElementId, heights: Vec<i64> },
-    SetTitle { title: Option<String> },
-    SetSize { size: DeckSize },
-}
-
-/// Applies deferred edits to the committed document and rebuilds the deck.
-///
-/// `Deck::from_document` starts a fresh history, so the revision the transaction
-/// already committed is kept as is: one edit script is still one bump.
-fn apply_deferred(deck: &mut Deck, deferred: Vec<Deferred>) -> Result<(), ServiceError> {
-    if deferred.is_empty() {
-        return Ok(());
-    }
-    let mut document = deck.document().clone();
-    for operation in deferred {
-        match operation {
-            Deferred::TableRows { slide, element, rows } => {
-                let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide)
-                else {
-                    continue;
-                };
-                let Some(target) = model.elements.iter_mut().find(|candidate| candidate.id == element)
-                else {
-                    continue;
-                };
-                if let ElementContent::Table(table) = &mut target.content {
-                    table.rows = rows;
-                }
-            }
-            Deferred::SetTitle { title } => document.title = title,
-            Deferred::SetSize { size } => document.size = size,
-            Deferred::SetFill { slide, element, fill } => {
-                let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide)
-                else {
-                    continue;
-                };
-                let Some(target) = model.elements.iter_mut().find(|candidate| candidate.id == element)
-                else {
-                    continue;
-                };
-                if let ElementContent::Shape(shape) = &mut target.content {
-                    shape.fill = fill;
-                }
-            }
-            Deferred::SetLine { slide, element, line } => {
-                let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide)
-                else {
-                    continue;
-                };
-                let Some(target) = model.elements.iter_mut().find(|candidate| candidate.id == element)
-                else {
-                    continue;
-                };
-                if let ElementContent::Shape(shape) = &mut target.content {
-                    shape.line = line;
-                }
-            }
-            Deferred::SetColumnWidths { slide, element, widths } => {
-                let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide)
-                else {
-                    continue;
-                };
-                let Some(target) = model.elements.iter_mut().find(|candidate| candidate.id == element)
-                else {
-                    continue;
-                };
-                if let ElementContent::Table(table) = &mut target.content {
-                    table.column_widths_emu = widths;
-                }
-            }
-            Deferred::SetRowHeights { slide, element, heights } => {
-                let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide)
-                else {
-                    continue;
-                };
-                let Some(target) = model.elements.iter_mut().find(|candidate| candidate.id == element)
-                else {
-                    continue;
-                };
-                if let ElementContent::Table(table) = &mut target.content {
-                    for (row, height) in table.rows.iter_mut().zip(heights) {
-                        row.height_emu = height;
-                    }
-                }
-            }
-        }
-    }
-    *deck = Deck::from_document(document).map_err(ServiceError::from)?;
-    Ok(())
 }
 
 /// Returns one slide with its elements in authoring units.
@@ -338,7 +235,6 @@ pub fn redo(deck: &mut Deck) -> Value {
 struct EditState {
     resolved: HashMap<String, String>,
     results: Vec<Option<String>>,
-    deferred: Vec<Deferred>,
     pruned: Vec<String>,
 }
 
@@ -381,7 +277,7 @@ impl EditState {
                     }
                     Some(_) => return Err(invalid("`title` must be a string or null")),
                 };
-                self.deferred.push(Deferred::SetTitle { title });
+                draft.set_deck_title(title)?;
                 None
             }
             "deck.setSize" => {
@@ -404,7 +300,7 @@ impl EditState {
                     DeckSize::from_points(width, height)
                         .ok_or_else(|| invalid("custom slide size must use finite positive point values"))?
                 };
-                self.deferred.push(Deferred::SetSize { size });
+                draft.set_deck_size(size)?;
                 None
             }
             "slide.add" => Some(self.add_slide(draft, operation)?),
@@ -689,42 +585,14 @@ impl EditState {
                     Value::String(color) => Some(Fill::Solid { color: color.clone() }),
                     _ => return Err(invalid("`fill` must be a CSS colour string or null")),
                 };
-                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
-                let target = model.element(&element).ok_or_else(|| {
-                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
-                        .with_slide(slide.clone())
-                        .with_element(element.clone())
-                })?;
-                if !matches!(target.content, ElementContent::Shape(_)) {
-                    return Err(DeckError::new(
-                        codes::OBJECT_TYPE_MISMATCH,
-                        format!("element `{element}` is not a shape; only shapes carry a fill"),
-                    )
-                    .with_slide(slide.clone())
-                    .with_element(element.clone()));
-                }
-                self.deferred.push(Deferred::SetFill { slide, element, fill });
+                draft.set_shape_fill(&slide, &element, fill)?;
                 None
             }
             "element.setLine" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
                 let line = required_line(operation)?;
-                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
-                let target = model.element(&element).ok_or_else(|| {
-                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
-                        .with_slide(slide.clone())
-                        .with_element(element.clone())
-                })?;
-                if !matches!(target.content, ElementContent::Shape(_)) {
-                    return Err(DeckError::new(
-                        codes::OBJECT_TYPE_MISMATCH,
-                        format!("element `{element}` is not a shape; only shapes carry a line"),
-                    )
-                    .with_slide(slide.clone())
-                    .with_element(element.clone()));
-                }
-                self.deferred.push(Deferred::SetLine { slide, element, line });
+                draft.set_shape_line(&slide, &element, line)?;
                 None
             }
             "table.setCell" => {
@@ -742,36 +610,12 @@ impl EditState {
                 if text.is_none() && fill.is_none() {
                     return Err(invalid("`table.setCell` needs `text` and/or `fill`"));
                 }
-                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
-                let target = model.element(&element).ok_or_else(|| {
-                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
-                        .with_slide(slide.clone())
-                        .with_element(element.clone())
-                })?;
-                let ElementContent::Table(table) = &target.content
-                else {
-                    return Err(DeckError::new(
-                        codes::OBJECT_TYPE_MISMATCH,
-                        format!("element `{element}` is not a table; only tables carry cells"),
-                    )
-                    .with_slide(slide.clone())
-                    .with_element(element.clone()));
-                };
-                if row >= table.rows.len() {
-                    return Err(invalid(format!("`row` {row} is outside the table's {} rows", table.rows.len())));
-                }
-                let columns = table.rows[row].cells.len();
-                if column >= columns {
-                    return Err(invalid(format!("`column` {column} is outside row {row}'s {columns} cells")));
-                }
-                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
                 if let Some(text) = text {
-                    rows[row].cells[column].text = TextContent::plain(text);
+                    draft.set_table_cell_text(&slide, &element, row, column, text)?;
                 }
                 if let Some(fill) = fill {
-                    rows[row].cells[column].fill = fill;
+                    draft.set_table_cell_fill(&slide, &element, row, column, fill)?;
                 }
-                self.queue_table_rows(slide, element, rows);
                 None
             }
             "table.setCellStyle" => {
@@ -780,126 +624,30 @@ impl EditState {
                 let row = required_usize(operation, "row")?;
                 let column = required_usize(operation, "column")?;
                 let style = parse_text_style(operation, "table.setCellStyle")?;
-                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
-                let target = model.element(&element).ok_or_else(|| {
-                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
-                        .with_slide(slide.clone())
-                        .with_element(element.clone())
-                })?;
-                let ElementContent::Table(table) = &target.content
-                else {
-                    return Err(DeckError::new(
-                        codes::OBJECT_TYPE_MISMATCH,
-                        format!("element `{element}` is not a table; only tables carry cells"),
-                    )
-                    .with_slide(slide.clone())
-                    .with_element(element.clone()));
-                };
-                if row >= table.rows.len() {
-                    return Err(invalid(format!("`row` {row} is outside the table's {} rows", table.rows.len())));
-                }
-                let columns = table.rows[row].cells.len();
-                if column >= columns {
-                    return Err(invalid(format!("`column` {column} is outside row {row}'s {columns} cells")));
-                }
-                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
-                style.apply(&mut rows[row].cells[column].text);
-                self.queue_table_rows(slide, element, rows);
+                draft.style_table_cell(&slide, &element, row, column, &style)?;
                 None
             }
             "table.insertRow" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
                 let index = required_usize(operation, "row")?;
-                let requested = optional_string_array(operation, "cells")?;
-                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
-                let target = model.element(&element).ok_or_else(|| {
-                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
-                        .with_slide(slide.clone())
-                        .with_element(element.clone())
-                })?;
-                let ElementContent::Table(table) = &target.content
-                else {
-                    return Err(DeckError::new(
-                        codes::OBJECT_TYPE_MISMATCH,
-                        format!("element `{element}` is not a table; only tables carry rows"),
-                    )
-                    .with_slide(slide.clone())
-                    .with_element(element.clone()));
-                };
-                let columns = table.column_widths_emu.len();
-                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
-                if index > rows.len() {
-                    return Err(invalid(format!("`row` {index} is outside the table's insertion points 0..={}", rows.len())));
-                }
-                if rows.iter().enumerate().any(|(position, row)| {
-                    position < index && row.cells.iter().any(|cell| position + cell.row_span as usize > index)
-                }) {
-                    return Err(invalid("a merged cell spans across the insertion point; insert after it instead"));
-                }
-                let cells = match requested {
-                    Some(texts) => {
-                        if texts.len() != columns {
-                            return Err(invalid(format!(
-                                "`cells` lists {} entries but the table has {columns} columns",
-                                texts.len()
-                            )));
-                        }
-                        texts.into_iter().map(TableCell::plain).collect::<Vec<_>>()
-                    }
-                    None => (0..columns).map(|_| TableCell::plain("")).collect::<Vec<_>>(),
-                };
                 let height_emu = match operation.get("heightPt") {
-                    None | Some(Value::Null) => rows
-                        .get(index)
-                        .or_else(|| rows.last())
-                        .map(|row| row.height_emu)
-                        .unwrap_or_else(|| document_presentation::authored::points_to_emu(24.0).unwrap_or_default()),
-                    Some(raw) => raw
-                        .as_f64()
-                        .and_then(document_presentation::authored::points_to_emu)
-                        .ok_or_else(|| invalid("`heightPt` must be a finite positive point height"))?,
+                    None | Some(Value::Null) => None,
+                    Some(raw) => Some(
+                        raw.as_f64()
+                            .and_then(document_presentation::authored::points_to_emu)
+                            .ok_or_else(|| invalid("`heightPt` must be a finite positive point height"))?,
+                    ),
                 };
-                rows.insert(index, TableRow { height_emu, cells });
-                self.queue_table_rows(slide, element, rows);
+                let cells = optional_string_array(operation, "cells")?;
+                draft.insert_table_row(&slide, &element, TableRowInsertInput { index, cells, height_emu })?;
                 None
             }
             "table.deleteRow" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
                 let index = required_usize(operation, "row")?;
-                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
-                let target = model.element(&element).ok_or_else(|| {
-                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
-                        .with_slide(slide.clone())
-                        .with_element(element.clone())
-                })?;
-                let ElementContent::Table(table) = &target.content
-                else {
-                    return Err(DeckError::new(
-                        codes::OBJECT_TYPE_MISMATCH,
-                        format!("element `{element}` is not a table; only tables carry rows"),
-                    )
-                    .with_slide(slide.clone())
-                    .with_element(element.clone()));
-                };
-                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
-                if index >= rows.len() {
-                    return Err(invalid(format!("`row` {index} is outside the table's {} rows", rows.len())));
-                }
-                if rows.len() == 1 {
-                    return Err(invalid("a table must keep at least one row"));
-                }
-                if rows.iter().enumerate().any(|(position, row)| {
-                    row.cells.iter().any(|cell| {
-                        (position < index && position + cell.row_span as usize > index)
-                            || (position == index && cell.row_span > 1)
-                    })
-                }) {
-                    return Err(invalid("row is covered by a merged cell; remove the merge before deleting it"));
-                }
-                rows.remove(index);
-                self.queue_table_rows(slide, element, rows);
+                draft.delete_table_row(&slide, &element, index)?;
                 None
             }
             "table.moveRow" => {
@@ -907,367 +655,72 @@ impl EditState {
                 let element = self.element(operation)?;
                 let from = required_usize(operation, "row")?;
                 let to = required_usize(operation, "index")?;
-                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
-                let target = model.element(&element).ok_or_else(|| {
-                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
-                        .with_slide(slide.clone())
-                        .with_element(element.clone())
-                })?;
-                let ElementContent::Table(table) = &target.content
-                else {
-                    return Err(DeckError::new(
-                        codes::OBJECT_TYPE_MISMATCH,
-                        format!("element `{element}` is not a table; only tables carry rows"),
-                    )
-                    .with_slide(slide.clone())
-                    .with_element(element.clone()));
-                };
-                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
-                if from >= rows.len() {
-                    return Err(invalid(format!("`row` {from} is outside the table's {} rows", rows.len())));
-                }
-                if to >= rows.len() {
-                    return Err(invalid(format!("`index` {to} is outside the table's {} rows", rows.len())));
-                }
-                if rows.iter().any(|row| row.cells.iter().any(|cell| cell.row_span > 1)) {
-                    return Err(invalid("row moves need a table without vertical merges"));
-                }
-                let row = rows.remove(from);
-                rows.insert(to, row);
-                self.queue_table_rows(slide, element, rows);
+                draft.move_table_row(&slide, &element, from, to)?;
                 None
             }
             "table.duplicateRow" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
                 let row = required_usize(operation, "row")?;
-                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
-                let target = model.element(&element).ok_or_else(|| {
-                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
-                        .with_slide(slide.clone())
-                        .with_element(element.clone())
-                })?;
-                let ElementContent::Table(table) = &target.content
-                else {
-                    return Err(DeckError::new(
-                        codes::OBJECT_TYPE_MISMATCH,
-                        format!("element `{element}` is not a table; only tables carry rows"),
-                    )
-                    .with_slide(slide.clone())
-                    .with_element(element.clone()));
-                };
-                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
-                if row >= rows.len() {
-                    return Err(invalid(format!("`row` {row} is outside the table's {} rows", rows.len())));
-                }
-                if rows.iter().any(|candidate| candidate.cells.iter().any(|cell| cell.row_span > 1)) {
-                    return Err(invalid("row duplication needs a table without vertical merges"));
-                }
-                let copy = rows[row].clone();
-                rows.insert(row + 1, copy);
-                self.queue_table_rows(slide, element, rows);
-                Some((row + 1).to_string())
+                let index = draft.duplicate_table_row(&slide, &element, row, None)?;
+                Some(index.to_string())
             }
             "table.moveColumn" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
                 let from = required_usize(operation, "column")?;
                 let to = required_usize(operation, "index")?;
-                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
-                let target = model.element(&element).ok_or_else(|| {
-                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
-                        .with_slide(slide.clone())
-                        .with_element(element.clone())
-                })?;
-                let ElementContent::Table(table) = &target.content
-                else {
-                    return Err(DeckError::new(
-                        codes::OBJECT_TYPE_MISMATCH,
-                        format!("element `{element}` is not a table; only tables carry columns"),
-                    )
-                    .with_slide(slide.clone())
-                    .with_element(element.clone()));
-                };
-                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
-                let mut widths =
-                    Self::queued_widths(&self.deferred, &slide, &element).unwrap_or_else(|| table.column_widths_emu.clone());
-                let columns = widths.len();
-                if from >= columns {
-                    return Err(invalid(format!("`column` {from} is outside the table's {columns} columns")));
-                }
-                if to >= columns {
-                    return Err(invalid(format!("`index` {to} is outside the table's {columns} columns")));
-                }
-                if rows.iter().any(|row| row.cells.iter().any(|cell| cell.column_span > 1)) {
-                    return Err(invalid("column moves need a table without horizontal merges"));
-                }
-                for row in &mut rows {
-                    let cell = row.cells.remove(from);
-                    row.cells.insert(to, cell);
-                }
-                let width = widths.remove(from);
-                widths.insert(to, width);
-                self.queue_table_rows(slide.clone(), element.clone(), rows);
-                self.deferred.push(Deferred::SetColumnWidths { slide, element, widths });
+                draft.move_table_column(&slide, &element, from, to)?;
                 None
             }
             "table.duplicateColumn" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
                 let column = required_usize(operation, "column")?;
-                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
-                let target = model.element(&element).ok_or_else(|| {
-                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
-                        .with_slide(slide.clone())
-                        .with_element(element.clone())
-                })?;
-                let ElementContent::Table(table) = &target.content
-                else {
-                    return Err(DeckError::new(
-                        codes::OBJECT_TYPE_MISMATCH,
-                        format!("element `{element}` is not a table; only tables carry columns"),
-                    )
-                    .with_slide(slide.clone())
-                    .with_element(element.clone()));
-                };
-                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
-                let mut widths =
-                    Self::queued_widths(&self.deferred, &slide, &element).unwrap_or_else(|| table.column_widths_emu.clone());
-                let columns = widths.len();
-                if column >= columns {
-                    return Err(invalid(format!("`column` {column} is outside the table's {columns} columns")));
-                }
-                if rows.iter().any(|candidate| candidate.cells.iter().any(|cell| cell.column_span > 1)) {
-                    return Err(invalid("column duplication needs a table without horizontal merges"));
-                }
-                for candidate in &mut rows {
-                    let copy = candidate.cells[column].clone();
-                    candidate.cells.insert(column + 1, copy);
-                }
-                let width = widths[column];
-                widths.insert(column + 1, width);
-                self.queue_table_rows(slide.clone(), element.clone(), rows);
-                self.deferred.push(Deferred::SetColumnWidths { slide, element, widths });
-                Some((column + 1).to_string())
+                let index = draft.duplicate_table_column(&slide, &element, column, None)?;
+                Some(index.to_string())
             }
             "table.insertColumn" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
                 let index = required_usize(operation, "column")?;
-                let requested = optional_string_array(operation, "cells")?;
-                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
-                let target = model.element(&element).ok_or_else(|| {
-                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
-                        .with_slide(slide.clone())
-                        .with_element(element.clone())
-                })?;
-                let ElementContent::Table(table) = &target.content
-                else {
-                    return Err(DeckError::new(
-                        codes::OBJECT_TYPE_MISMATCH,
-                        format!("element `{element}` is not a table; only tables carry columns"),
-                    )
-                    .with_slide(slide.clone())
-                    .with_element(element.clone()));
-                };
-                let mut widths =
-                    Self::queued_widths(&self.deferred, &slide, &element).unwrap_or_else(|| table.column_widths_emu.clone());
-                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
-                if index > widths.len() {
-                    return Err(invalid(format!(
-                        "`column` {index} is outside the table's insertion points 0..={}",
-                        widths.len()
-                    )));
-                }
-                for row in &rows {
-                    let mut position = 0usize;
-                    for cell in &row.cells {
-                        if position < index && position + cell.column_span as usize > index {
-                            return Err(invalid("a merged cell spans across the insertion point; insert after it instead"));
-                        }
-                        position += cell.column_span as usize;
-                    }
-                }
-                let texts = match requested {
-                    Some(texts) => {
-                        if texts.len() != rows.len() {
-                            return Err(invalid(format!(
-                                "`cells` lists {} entries but the table has {} rows",
-                                texts.len(),
-                                rows.len()
-                            )));
-                        }
-                        texts
-                    }
-                    None => vec![String::new(); rows.len()],
-                };
                 let width_emu = match operation.get("widthPt") {
-                    None | Some(Value::Null) => widths.get(index).or_else(|| widths.last()).copied().unwrap_or_default(),
-                    Some(raw) => raw
-                        .as_f64()
-                        .and_then(document_presentation::authored::points_to_emu)
-                        .ok_or_else(|| invalid("`widthPt` must be a finite positive point width"))?,
+                    None | Some(Value::Null) => None,
+                    Some(raw) => Some(
+                        raw.as_f64()
+                            .and_then(document_presentation::authored::points_to_emu)
+                            .ok_or_else(|| invalid("`widthPt` must be a finite positive point width"))?,
+                    ),
                 };
-                for (position_in_rows, row) in rows.iter_mut().enumerate() {
-                    let text = texts[position_in_rows].clone();
-                    let mut position = 0usize;
-                    let mut cell_index = 0usize;
-                    while position < index && cell_index < row.cells.len() {
-                        position += row.cells[cell_index].column_span as usize;
-                        cell_index += 1;
-                    }
-                    row.cells.insert(cell_index, TableCell::plain(text));
-                }
-                widths.insert(index, width_emu);
-                self.queue_table_rows(slide.clone(), element.clone(), rows);
-                self.deferred.push(Deferred::SetColumnWidths { slide, element, widths });
+                let cells = optional_string_array(operation, "cells")?;
+                draft.insert_table_column(&slide, &element, TableColumnInsertInput { index, cells, width_emu })?;
                 None
             }
             "table.deleteColumn" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
                 let index = required_usize(operation, "column")?;
-                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
-                let target = model.element(&element).ok_or_else(|| {
-                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
-                        .with_slide(slide.clone())
-                        .with_element(element.clone())
-                })?;
-                let ElementContent::Table(table) = &target.content
-                else {
-                    return Err(DeckError::new(
-                        codes::OBJECT_TYPE_MISMATCH,
-                        format!("element `{element}` is not a table; only tables carry columns"),
-                    )
-                    .with_slide(slide.clone())
-                    .with_element(element.clone()));
-                };
-                let mut widths =
-                    Self::queued_widths(&self.deferred, &slide, &element).unwrap_or_else(|| table.column_widths_emu.clone());
-                let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
-                if index >= widths.len() {
-                    return Err(invalid(format!("`column` {index} is outside the table's {} columns", widths.len())));
-                }
-                if widths.len() == 1 {
-                    return Err(invalid("a table must keep at least one column"));
-                }
-                for row in &rows {
-                    let mut position = 0usize;
-                    for cell in &row.cells {
-                        let span = cell.column_span as usize;
-                        if span > 1 && position <= index && position + span > index {
-                            return Err(invalid("column is covered by a merged cell; remove the merge before deleting it"));
-                        }
-                        position += span;
-                    }
-                }
-                for row in &mut rows {
-                    let mut position = 0usize;
-                    for cell_index in 0..row.cells.len() {
-                        if position == index {
-                            row.cells.remove(cell_index);
-                            break;
-                        }
-                        position += row.cells[cell_index].column_span as usize;
-                    }
-                }
-                widths.remove(index);
-                self.queue_table_rows(slide.clone(), element.clone(), rows);
-                self.deferred.push(Deferred::SetColumnWidths { slide, element, widths });
+                draft.delete_table_column(&slide, &element, index)?;
                 None
             }
             "table.setColumnWidths" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
                 let widths = point_list(operation, "columnWidthsPt")?;
-                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
-                let target = model.element(&element).ok_or_else(|| {
-                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
-                        .with_slide(slide.clone())
-                        .with_element(element.clone())
-                })?;
-                let ElementContent::Table(table) = &target.content
-                else {
-                    return Err(DeckError::new(
-                        codes::OBJECT_TYPE_MISMATCH,
-                        format!("element `{element}` is not a table; only tables carry columns"),
-                    )
-                    .with_slide(slide.clone())
-                    .with_element(element.clone()));
-                };
-                if widths.len() != table.column_widths_emu.len() {
-                    return Err(invalid(format!(
-                        "`columnWidthsPt` needs one width per column; the table has {}",
-                        table.column_widths_emu.len()
-                    )));
-                }
-                self.deferred.push(Deferred::SetColumnWidths { slide, element, widths });
+                draft.set_table_column_widths(&slide, &element, widths)?;
                 None
             }
             "table.setRowHeights" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
                 let heights = point_list(operation, "rowHeightsPt")?;
-                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
-                let target = model.element(&element).ok_or_else(|| {
-                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
-                        .with_slide(slide.clone())
-                        .with_element(element.clone())
-                })?;
-                let ElementContent::Table(table) = &target.content
-                else {
-                    return Err(DeckError::new(
-                        codes::OBJECT_TYPE_MISMATCH,
-                        format!("element `{element}` is not a table; only tables carry rows"),
-                    )
-                    .with_slide(slide.clone())
-                    .with_element(element.clone()));
-                };
-                if heights.len() != table.rows.len() {
-                    return Err(invalid(format!(
-                        "`rowHeightsPt` needs one height per row; the table has {}",
-                        table.rows.len()
-                    )));
-                }
-                self.deferred.push(Deferred::SetRowHeights { slide, element, heights });
+                draft.set_table_row_heights(&slide, &element, heights)?;
                 None
             }
             "table.transpose" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
-                let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
-                let target = model.element(&element).ok_or_else(|| {
-                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
-                        .with_slide(slide.clone())
-                        .with_element(element.clone())
-                })?;
-                let ElementContent::Table(table) = &target.content
-                else {
-                    return Err(DeckError::new(
-                        codes::OBJECT_TYPE_MISMATCH,
-                        format!("element `{element}` is not a table; transposition needs a table"),
-                    )
-                    .with_slide(slide.clone())
-                    .with_element(element.clone()));
-                };
-                let rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
-                let widths =
-                    Self::queued_widths(&self.deferred, &slide, &element).unwrap_or_else(|| table.column_widths_emu.clone());
-                if rows.iter().any(|row| row.cells.iter().any(|cell| cell.row_span > 1 || cell.column_span > 1)) {
-                    return Err(invalid("transposition needs a table without merged cells"));
-                }
-                if rows.iter().any(|row| row.cells.len() != widths.len()) {
-                    return Err(invalid("transposition needs a rectangular table; every row must carry one cell per column"));
-                }
-                let transposed = (0..widths.len())
-                    .map(|column| TableRow {
-                        height_emu: widths[column],
-                        cells: rows.iter().map(|row| row.cells[column].clone()).collect(),
-                    })
-                    .collect::<Vec<_>>();
-                let heights = rows.iter().map(|row| row.height_emu).collect::<Vec<_>>();
-                self.queue_table_rows(slide.clone(), element.clone(), transposed);
-                self.deferred.push(Deferred::SetColumnWidths { slide, element, widths: heights });
+                draft.transpose_table(&slide, &element)?;
                 None
             }
             "element.setChartData" => {
@@ -1342,33 +795,6 @@ impl EditState {
         Ok(())
     }
 
-    /// The most recently queued column widths for one table, if any.
-    fn queued_widths(deferred: &[Deferred], slide: &SlideId, element: &ElementId) -> Option<Vec<i64>> {
-        deferred.iter().rev().find_map(|entry| match entry {
-            Deferred::SetColumnWidths { slide: queued_slide, element: queued_element, widths }
-                if queued_slide == slide && queued_element == element =>
-            {
-                Some(widths.clone())
-            }
-            _ => None,
-        })
-    }
-
-    /// Queues a table's rebuilt rows, replacing an earlier cell edit on the same
-    /// element so several `table.setCell` operations compose in one script.
-    fn queue_table_rows(&mut self, slide: SlideId, element: ElementId, rows: Vec<TableRow>) {
-        for entry in &mut self.deferred {
-            if let Deferred::TableRows { slide: queued_slide, element: queued_element, rows: queued_rows } = entry
-                && *queued_slide == slide
-                && *queued_element == element
-            {
-                *queued_rows = rows;
-                return;
-            }
-        }
-        self.deferred.push(Deferred::TableRows { slide, element, rows });
-    }
-
     fn add_slide(&mut self, draft: &mut DeckEdit, operation: &Value) -> Result<String, DeckError> {
         let layout = operation.get("layout").and_then(Value::as_str).map(|value| self.resolve_value(value)).transpose()?;
         let layout = layout
@@ -1394,9 +820,9 @@ impl EditState {
 
     /// Replaces every match of `find` in the deck's text elements and table cells.
     ///
-    /// Text elements are rewritten through `set_element_text` inside the
-    /// transaction; table cells have no upstream setter, so their rebuilt rows
-    /// join the deferred list. Matching mirrors `deck.search`: case-insensitive
+    /// Text elements and table cells are rewritten inside the transaction by the
+    /// upstream `replace_text`, so the rewrite is atomic with the rest of the
+    /// script. Matching mirrors `deck.search`: case-insensitive
     /// by default, with an optional whole-word boundary. Replacement happens per
     /// run, so a match spanning two runs stays untouched. `slideIds` restricts
     /// the rewrite to those slides and unknown ids are ignored, exactly like the
@@ -1945,18 +1371,6 @@ fn optional_fill(value: Option<&Value>) -> Result<Option<Fill>, DeckError> {
         Some(Value::String(color)) => Ok(Some(Fill::Solid { color: color.clone() })),
         Some(_) => Err(invalid("`fill` must be a CSS colour string or null")),
     }
-}
-
-/// Rows already queued for one table, so a later cell edit starts from them.
-fn queued_rows(deferred: &[Deferred], slide: &SlideId, element: &ElementId) -> Option<Vec<TableRow>> {
-    deferred.iter().find_map(|entry| match entry {
-        Deferred::TableRows { slide: queued_slide, element: queued_element, rows }
-            if queued_slide == slide && queued_element == element =>
-        {
-            Some(rows.clone())
-        }
-        _ => None,
-    })
 }
 
 /// Parses the `line` argument of `element.setLine`.

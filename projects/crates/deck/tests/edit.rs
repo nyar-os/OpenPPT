@@ -374,8 +374,8 @@ fn invalid_reorder_and_background_arguments_do_not_commit() {
             ],
         }),
     )
-    .expect("deferred operations commit together");
-    assert_eq!(report["revision"], revision + 1, "two deferred operations still bump once");
+    .expect("queued operations commit together");
+    assert_eq!(report["revision"], revision + 1, "two operations in one script still bump once");
 }
 
 fn shape_deck(boxes: &[(f64, f64, f64, f64)]) -> (Deck, String, Vec<String>) {
@@ -2323,13 +2323,13 @@ fn table_transpose_handles_a_non_square_table_and_composes_with_cell_edits() {
             { "op": "table.transpose", "slideId": second, "elementId": table },
         ] }),
     )
-    .expect("transpose after a queued cell edit");
+    .expect("transpose after a cell edit in the same script");
 
     let detail = slide_detail(&deck, &second).expect("slide exists");
     let rows = detail["elements"][1]["content"]["rows"].as_array().expect("rows");
     assert_eq!(rows.len(), 3, "two rows became three");
     assert_eq!(rows[0]["cells"].as_array().expect("cells").len(), 2, "three columns became two");
-    assert_eq!(rows[0]["cells"][0]["text"], json!("Plan"), "the queued cell edit is transposed");
+    assert_eq!(rows[0]["cells"][0]["text"], json!("Plan"), "the earlier cell edit is transposed");
     assert_eq!(rows[0]["cells"][1]["text"], json!("Cost"));
     assert_eq!(rows[1]["cells"][0]["text"], json!("Q4 revenue plan"));
     assert_eq!(rows[2]["cells"][0]["text"], json!("Note"));
