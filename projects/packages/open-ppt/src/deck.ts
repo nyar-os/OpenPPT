@@ -162,7 +162,9 @@ export class Deck {
                 const id = created(report.results, 'assets.add');
                 const asset = service.assets(this.state.handle).find((candidate) => candidate.id === id);
                 if (asset === undefined) {
-                    throw new OpenPPTError('object/not-found', `asset \`${id}\` is missing after it was added`);
+                    throw new OpenPPTError('object/not-found', `asset \`${id}\` is missing after it was added`, {
+                        params: { kind: 'asset', id },
+                    });
                 }
                 return {
                     id: asset.id,
@@ -746,6 +748,7 @@ class ElementsView {
         const element = detail.elements.find((candidate) => candidate.id === elementId);
         if (element === undefined) {
             throw new OpenPPTError('object/not-found', `element \`${elementId}\` is not on slide \`${this.slideId}\``, {
+                params: { kind: 'element', id: elementId },
                 details: { feature: 'elements.get', slideId: this.slideId, elementId },
             });
         }
@@ -997,7 +1000,9 @@ function unsupported(feature: string): Promise<never> {
 function created(results: ReadonlyArray<string | null>, feature: string): string {
     const id = results[0];
     if (id === undefined || id === null) {
-        throw new OpenPPTError('object/not-found', `the engine did not return an identity for \`${feature}\``);
+        throw new OpenPPTError('object/not-found', `the engine did not return an identity for \`${feature}\``, {
+            params: { kind: 'element', id: feature },
+        });
     }
     return id;
 }
@@ -1007,6 +1012,7 @@ function elementViewFrom(deck: Deck, slideId: SlideId, elementId: ElementId): El
     const element = detail.elements.find((candidate) => candidate.id === elementId);
     if (element === undefined) {
         throw new OpenPPTError('object/not-found', `element \`${elementId}\` is missing after the edit`, {
+            params: { kind: 'element', id: elementId },
             details: { feature: 'elements.get', slideId, elementId },
         });
     }

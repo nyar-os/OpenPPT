@@ -25,7 +25,7 @@ use std::{
 use boost_fs::{OverwritePolicy, PublishOptions, publish_bytes_with_options};
 use data_encoding::representation::Base64;
 use document_presentation::authored::{
-    Deck, DeckCreateOptions, DeckError, DeckSize, InspectOptions, Severity, SlideAddOptions, codes, decode_project, encode_project,
+    Deck, DeckCreateOptions, DeckError, DeckSize, InspectOptions, Severity, SlideAddOptions, decode_project, encode_project,
 };
 use serde_json::{Map, Value, json};
 
@@ -120,7 +120,9 @@ impl ServiceError {
 
     /// `format/invalid-package`: a package failed validation.
     pub fn format_invalid(message: impl Into<String>) -> Self {
-        Self::build("format/invalid-package", message)
+        let message = message.into();
+        let reason = message.clone();
+        Self::build("format/invalid-package", message).with_params(json!({ "reason": reason }))
     }
 
     /// `export/loss-exceeded`: the loss policy refused the export.
@@ -164,39 +166,11 @@ impl std::error::Error for ServiceError {
 
 impl From<DeckError> for ServiceError {
     fn from(error: DeckError) -> Self {
-        let code = error.code();
-        let mut params = Map::new();
-        if code == codes::ARGUMENT_INVALID {
-            // The catalog renders the rejection reason, so the upstream prose travels as a typed parameter.
-            params.insert("reason".to_owned(), Value::from(error.message()));
-        }
-        if let Some(revision) = error.revision() {
-            // A conflict contrasts the committed revision against the one the edit expected.
-            let key = if code == codes::DECK_REVISION_CONFLICT { "actual" } else { "revision" };
-            params.insert(key.to_owned(), Value::from(revision));
-        }
-        if code == codes::OBJECT_NOT_FOUND {
-            // Not-found addresses the object as a kind/id pair, preferring the element.
-            if let Some(element_id) = error.element_id() {
-                params.insert("kind".to_owned(), Value::from("element"));
-                params.insert("id".to_owned(), Value::from(element_id.as_str()));
-            }
-            else if let Some(slide_id) = error.slide_id() {
-                params.insert("kind".to_owned(), Value::from("slide"));
-                params.insert("id".to_owned(), Value::from(slide_id.as_str()));
-            }
-        }
-        else {
-            if let Some(slide_id) = error.slide_id() {
-                params.insert("slideId".to_owned(), Value::from(slide_id.as_str()));
-            }
-            if let Some(element_id) = error.element_id() {
-                params.insert("elementId".to_owned(), Value::from(element_id.as_str()));
-            }
-        }
-        let mut mapped = Self::engine(code, error.message());
-        if !params.is_empty() {
-            mapped = mapped.with_params(Value::Object(params));
+        // The upstream contract owns the payload: forward it verbatim instead of
+        // re-deriving parameters from the message or from the locators.
+        let mut mapped = Self::engine(error.code(), error.message());
+        if let Some(params) = error.params() {
+            mapped = mapped.with_params(params.to_json());
         }
         mapped
     }

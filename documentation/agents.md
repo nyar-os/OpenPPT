@@ -149,7 +149,7 @@ A batch is atomic: it either advances the deck revision once or leaves the previ
 
 ## Failures
 
-Every failure is an `OpenPPTError` with a stable `code`; never parse the message text.
+Every failure is an `OpenPPTError` with a stable `code` and a frozen `params` payload; never parse the message text. `error.failure` is a discriminated union, so narrowing on `code` narrows `params` (`{ kind, id }` for `object/not-found`, `{ actual, expected? }` for `deck/revision-conflict`, and so on); a payload that does not match its code's shape, and a code outside the contract, surface as one structured `binding/failure` carrying `{ reason, code }`.
 
 | Code | Meaning |
 |---|---|
@@ -165,6 +165,7 @@ Every failure is an `OpenPPTError` with a stable `code`; never parse the message
 | `export/loss-exceeded` | Loss policy rejected the export |
 | `render/backend-unavailable` | No renderer is available |
 | `asset/missing` | Referenced asset is not embedded |
+| `asset/in-use` | An element still places the asset |
 | `capability/not-implemented` | The installed build does not implement this entry point |
 
 ## Guardrails

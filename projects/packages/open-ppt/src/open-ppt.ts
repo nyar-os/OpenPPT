@@ -80,7 +80,7 @@ export class OpenPPT implements DeckOwner {
         if (!('path' in input)) {
             const key = 'bytes' in input ? 'bytes' : 'project';
             throw new OpenPPTError(
-                'format/unsupported',
+                'capability/not-implemented',
                 `opening \`${key}\` needs the package importer; write the project to a path and pass \`path\``,
                 { details: { feature: `open.${key}` } },
             );
@@ -88,7 +88,7 @@ export class OpenPPT implements DeckOwner {
         const intent: DeckIntent = input.intent ?? 'edit';
         if (intent !== 'edit') {
             throw new OpenPPTError(
-                'format/unsupported',
+                'capability/not-implemented',
                 `native projects open for editing; \`${intent}\` needs the projection pipeline`,
                 { details: { feature: `open.intent.${intent}` } },
             );

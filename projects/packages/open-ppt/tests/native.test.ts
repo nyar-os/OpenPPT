@@ -89,16 +89,16 @@ test('real binding failures deliver typed params beside the code', { skip }, asy
         () => deck.slideDetail('slide-missing'),
         (error) =>
             isOpenPPTError(error) &&
-            error.code === 'object/not-found' &&
-            error.params.kind === 'slide' &&
-            error.params.id === 'slide-missing',
+            error.failure.code === 'object/not-found' &&
+            error.failure.params.kind === 'slide' &&
+            error.failure.params.id === 'slide-missing',
     );
     const dir = mkdtempSync(join(tmpdir(), 'open-ppt-contract-'));
     const target = join(dir, 'contract.project');
     await deck.save({ target });
     await assert.rejects(
         deck.save({ target }),
-        (error) => isOpenPPTError(error) && error.code === 'io/exists' && error.params.path === target,
+        (error) => isOpenPPTError(error) && error.failure.code === 'io/exists' && error.failure.params.path === target,
     );
     await ppt.dispose();
 });
@@ -400,11 +400,11 @@ test('unwired inputs keep stable codes instead of inventing a deck', { skip }, a
     );
     await assert.rejects(
         ppt.open({ bytes: new Uint8Array() }),
-        (error) => isOpenPPTError(error) && error.code === 'format/unsupported',
+        (error) => isOpenPPTError(error) && error.code === 'capability/not-implemented',
     );
     await assert.rejects(
         ppt.open({ project: '{}' }),
-        (error) => isOpenPPTError(error) && error.code === 'format/unsupported',
+        (error) => isOpenPPTError(error) && error.code === 'capability/not-implemented',
     );
     await ppt.dispose();
 });

@@ -54,12 +54,12 @@ fn insert(deck: Deck) -> u64 {
 
 fn with_deck<T>(handle: u64, work: impl FnOnce(&Deck) -> T) -> Result<T> {
     let guard = lock();
-    guard.decks.get(&handle).map(work).ok_or_else(|| Error::new("the deck handle is not open").code("deck/not-found"))
+    guard.decks.get(&handle).map(work).ok_or_else(missing_deck)
 }
 
 fn with_deck_mut<T>(handle: u64, work: impl FnOnce(&mut Deck) -> T) -> Result<T> {
     let mut guard = lock();
-    guard.decks.get_mut(&handle).map(work).ok_or_else(|| Error::new("the deck handle is not open").code("deck/not-found"))
+    guard.decks.get_mut(&handle).map(work).ok_or_else(missing_deck)
 }
 
 fn remove(handle: u64) -> bool {
@@ -92,7 +92,7 @@ fn insert_playback(playback: Playback) -> u64 {
 
 fn with_playback<T>(handle: u64, work: impl FnOnce(&Playback) -> T) -> Result<T> {
     let guard = playback_lock();
-    guard.items.get(&handle).map(work).ok_or_else(|| Error::new("the presentation handle is not open").code("object/not-found"))
+    guard.items.get(&handle).map(work).ok_or_else(|| missing_presentation(handle))
 }
 
 fn remove_playback(handle: u64) -> bool {
@@ -107,8 +107,34 @@ fn fail(error: ServiceError) -> Error {
     mapped
 }
 
+/// `session/argument-invalid` with the frozen `{ reason }` payload.
+fn argument_error(message: impl Into<String>) -> Error {
+    let message = message.into();
+    Error::new(message.clone()).code("session/argument-invalid").detail(json!({ "params": { "reason": message } }))
+}
+
+/// `deck/not-found`, whose frozen payload is empty.
+fn missing_deck() -> Error {
+    Error::new("the deck handle is not open").code("deck/not-found").detail(json!({ "params": {} }))
+}
+
+/// `object/not-found` for a playback handle, addressed as `{ kind, id }`.
+fn missing_presentation(handle: u64) -> Error {
+    Error::new("the presentation handle is not open")
+        .code("object/not-found")
+        .detail(json!({ "params": { "kind": "presentation", "id": handle.to_string() } }))
+}
+
+/// `capability/not-implemented` with the frozen `{ feature }` payload.
+fn not_implemented(feature: impl Into<String>) -> Error {
+    let feature = feature.into();
+    Error::new(format!("the `{feature}` capability is not implemented yet"))
+        .code("capability/not-implemented")
+        .detail(json!({ "params": { "feature": feature } }))
+}
+
 fn argument(ctx: &CallContext, index: usize) -> Result<JsValue> {
-    ctx.args().get(index).copied().ok_or_else(|| Error::new("a required argument is missing").code("session/argument-invalid"))
+    ctx.args().get(index).copied().ok_or_else(|| argument_error("a required argument is missing"))
 }
 
 fn text(ctx: &CallContext, index: usize) -> Result<String> {
@@ -120,7 +146,7 @@ fn optional_json(ctx: &CallContext, index: usize) -> Result<Value> {
     match ctx.args().get(index) {
         Some(value) if !value.is_undefined()? => {
             let raw = value.as_string()?;
-            serde_json::from_str(&raw).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))
+            serde_json::from_str(&raw).map_err(|error| argument_error(error.to_string()))
         }
         _ => Ok(Value::Null),
     }
@@ -130,13 +156,13 @@ fn optional_json(ctx: &CallContext, index: usize) -> Result<Value> {
 fn check_render_format(request: &Value) -> Result<()> {
     match request.get("format").and_then(Value::as_str) {
         None | Some("svg") => Ok(()),
-        Some(other) => Err(Error::new(format!("capability/not-implemented: the `{other}` renderer is not implemented yet"))),
+        Some(other) => Err(not_implemented(format!("{other} renderer"))),
     }
 }
 
 fn handle(ctx: &CallContext, index: usize) -> Result<u64> {
     let raw = argument(ctx, index)?.as_i64()?;
-    u64::try_from(raw).map_err(|_| Error::new("the deck handle must be a non-negative integer").code("session/argument-invalid"))
+    u64::try_from(raw).map_err(|_| argument_error("the deck handle must be a non-negative integer"))
 }
 
 fn parse_size(request: &Value) -> Result<Option<SizeRequest>> {
@@ -147,11 +173,11 @@ fn parse_size(request: &Value) -> Result<Option<SizeRequest>> {
             let number = |key: &str| {
                 map.get(key)
                     .and_then(Value::as_f64)
-                    .ok_or_else(|| Error::new(format!("`size.{key}` must be a number in points")).code("session/argument-invalid"))
+                    .ok_or_else(|| argument_error(format!("`size.{key}` must be a number in points")))
             };
             Ok(Some(SizeRequest::Points { width_pt: number("widthPt")?, height_pt: number("heightPt")? }))
         }
-        _ => Err(Error::new("`size` must be a named ratio or `{ widthPt, heightPt }`").code("session/argument-invalid")),
+        _ => Err(argument_error("`size` must be a named ratio or `{ widthPt, heightPt }`")),
     }
 }
 
@@ -181,7 +207,7 @@ fn capabilities(ctx: CallContext) -> Result<JsValue> {
 fn deck_create(ctx: CallContext) -> Result<JsValue> {
     let raw = text(&ctx, 0)?;
     let request: Value =
-        serde_json::from_str(&raw).map_err(|error| Error::new(error.to_string()).code("session/argument-invalid"))?;
+        serde_json::from_str(&raw).map_err(|error| argument_error(error.to_string()))?;
     let slides = request["slides"]
         .as_array()
         .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect())
@@ -263,12 +289,12 @@ fn deck_inspect(ctx: CallContext) -> Result<JsValue> {
         Some(value) => {
             let raw = value.as_string()?;
             let names: Vec<String> =
-                serde_json::from_str(&raw).map_err(|error| Error::new(error.to_string()).code("session/argument-invalid"))?;
+                serde_json::from_str(&raw).map_err(|error| argument_error(error.to_string()))?;
             let mut parsed = Vec::with_capacity(names.len());
             for name in names {
                 parsed.push(
                     InspectCheck::parse(&name)
-                        .ok_or_else(|| Error::new(format!("session/argument-invalid: unknown check `{name}`")))?,
+                        .ok_or_else(|| argument_error(format!("unknown check `{name}`")))?,
                 );
             }
             Some(parsed)
@@ -293,7 +319,7 @@ fn deck_edit(ctx: CallContext) -> Result<JsValue> {
     let handle = handle(&ctx, 0)?;
     let raw = text(&ctx, 1)?;
     let request: Value =
-        serde_json::from_str(&raw).map_err(|error| Error::new(error.to_string()).code("session/argument-invalid"))?;
+        serde_json::from_str(&raw).map_err(|error| argument_error(error.to_string()))?;
     let report = with_deck_mut(handle, |deck| open_ppt_deck::edit::edit(deck, &request))?.map_err(fail)?;
     respond(&ctx, &report)
 }
@@ -345,7 +371,7 @@ fn deck_redo(ctx: CallContext) -> Result<JsValue> {
 fn deck_close(ctx: CallContext) -> Result<JsValue> {
     let handle = handle(&ctx, 0)?;
     if !remove(handle) {
-        return Err(Error::new("the deck handle is not open").code("deck/not-found"));
+        return Err(missing_deck());
     }
     ctx.env().boolean(true)
 }
@@ -394,7 +420,7 @@ fn pptx_slide(ctx: CallContext) -> Result<JsValue> {
     let handle = handle(&ctx, 0)?;
     let raw = argument(&ctx, 1)?.as_i64()?;
     let index =
-        u32::try_from(raw).map_err(|_| Error::new("the slide number must be a positive integer").code("session/argument-invalid"))?;
+        u32::try_from(raw).map_err(|_| argument_error("the slide number must be a positive integer"))?;
     let slide = with_playback(handle, |playback| playback.slide(index)).and_then(|slide| slide.map_err(fail))?;
     respond(&ctx, &json!({ "slide": slide }))
 }
@@ -404,7 +430,7 @@ fn pptx_slide(ctx: CallContext) -> Result<JsValue> {
 fn pptx_close(ctx: CallContext) -> Result<JsValue> {
     let handle = handle(&ctx, 0)?;
     if !remove_playback(handle) {
-        return Err(Error::new("the presentation handle is not open").code("object/not-found"));
+        return Err(missing_presentation(handle));
     }
     ctx.env().boolean(true)
 }
@@ -610,11 +636,24 @@ fn service_failure(error: ServiceError) -> Value {
 }
 
 fn wae_failure(error: Error) -> Value {
-    let mut payload = json!({ "code": error.code_name().unwrap_or("io/failure"), "message": error.message() });
-    if let Some(params) = error.detail_value().and_then(|detail| detail.get("params").cloned()) {
-        payload["params"] = params;
-    }
+    let code = error.code_name().unwrap_or("io/failure");
+    let message = error.message();
+    let mut payload = json!({ "code": code, "message": message });
+    let params = error
+        .detail_value()
+        .and_then(|detail| detail.get("params").cloned())
+        .unwrap_or_else(|| default_params(code, message));
+    payload["params"] = params;
     payload
+}
+
+/// Minimal frozen payload for a napi-layer code raised without one.
+fn default_params(code: &str, message: &str) -> Value {
+    match code {
+        "session/argument-invalid" | "format/invalid-package" | "playback/invalid-state" => json!({ "reason": message }),
+        "io/failure" => json!({ "kind": "Unknown" }),
+        _ => json!({}),
+    }
 }
 
 fn deck_call<T>(handle: u64, work: impl FnOnce(&Deck) -> T) -> std::result::Result<T, Value> {
