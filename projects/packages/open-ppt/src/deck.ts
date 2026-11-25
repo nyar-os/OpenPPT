@@ -40,6 +40,7 @@ import type {
     ExportOptions,
     ExportReport,
     FormulaElementInput,
+    ImageCrop,
     ImageElementInput,
     ImportLoss,
     InspectOptions,
@@ -132,6 +133,9 @@ export class Deck {
             remove: async (slideId: SlideId) => {
                 this.apply([{ op: 'slide.remove', slideId }]);
             },
+            clearNotes: async (slideId: SlideId) => {
+                this.apply([{ op: 'slide.clearNotes', slideId }]);
+            },
         };
         this.masters = { list: () => unsupported('masters.list') };
         this.layouts = { list: () => unsupported('layouts.list') };
@@ -171,6 +175,10 @@ export class Deck {
             },
             remove: async (assetId: AssetId) => {
                 this.apply([{ op: 'asset.remove', assetId }]);
+            },
+            prune: async () => {
+                const report = this.apply([{ op: 'asset.prune' }]);
+                return report.prunedAssets ?? [];
             },
         };
         this.playback = { create: () => unsupported('playback.create') };
@@ -788,6 +796,33 @@ class ElementsView {
             offsetXPt: options?.offsetX,
             offsetYPt: options?.offsetY,
         });
+    }
+
+    async replaceImage(elementId: ElementId, asset: AssetId | AssetInput): Promise<AssetId> {
+        const report = this.deck.apply([
+            { op: 'image.replace', slideId: this.slideId, elementId, ...payloadFor(asset, 'asset') },
+        ]);
+        return created(report.results, 'image.replace');
+    }
+
+    async setCrop(elementId: ElementId, crop: ImageCrop | null): Promise<void> {
+        this.deck.apply([{ op: 'image.setCrop', slideId: this.slideId, elementId, crop }]);
+    }
+
+    async moveImage(
+        elementId: ElementId,
+        options?: { readonly toSlideId?: SlideId; readonly index?: number },
+    ): Promise<number> {
+        const report = this.deck.apply([
+            {
+                op: 'image.move',
+                slideId: this.slideId,
+                elementId,
+                targetSlideId: options?.toSlideId,
+                index: options?.index,
+            },
+        ]);
+        return Number(created(report.results, 'image.move'));
     }
 
     async zOrder(elementId: ElementId, order: ZOrder): Promise<void> {

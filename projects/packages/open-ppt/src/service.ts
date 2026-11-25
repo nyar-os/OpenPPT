@@ -123,6 +123,8 @@ export interface EditReport {
     readonly revision: number;
     readonly results: ReadonlyArray<string | null>;
     readonly resolved: Readonly<Record<string, string>>;
+    /** Asset identities recycled by an `asset.prune` operation; absent when nothing was removed. */
+    readonly prunedAssets?: ReadonlyArray<string>;
 }
 
 /** Result of one undo or redo. */

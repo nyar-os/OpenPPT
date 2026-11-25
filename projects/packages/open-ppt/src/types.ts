@@ -461,6 +461,9 @@ export type ElementOperation =
     | ElementDuplicateOperation
     | ElementAlignOperation
     | ElementDistributeOperation
+    | ImageReplaceOperation
+    | ImageSetCropOperation
+    | ImageMoveOperation
     | TableMoveColumnOperation
     | TableDuplicateRowOperation
     | TableDuplicateColumnOperation
@@ -470,10 +473,11 @@ export type ElementOperation =
  * Edit operation that rebuilds one element as a new element at the end of the
  * slide, optionally shifted by a point offset.
  *
- * Text, shapes, tables and images are supported; charts, formulas, media,
- * cropped images and placeholder-bound text answer with `object/unsupported`
- * because the public authoring inputs cannot express them without data loss.
- * An unknown slide or element answers with `object/not-found`.
+ * Text, shapes, tables and images are supported; charts, formulas, media and
+ * placeholder-bound text answer with `object/unsupported` because the public
+ * authoring inputs cannot express them without data loss. Images keep crop,
+ * alternative text and lock and share the source asset record. An unknown
+ * slide or element answers with `object/not-found`.
  */
 export interface ElementDuplicateOperation {
     readonly op: 'element.duplicate';
@@ -498,6 +502,78 @@ export interface ElementReorderOperation {
     readonly slideId: SlideId;
     readonly elementId: ElementId;
     readonly index: number;
+}
+
+/**
+ * Crop box of an image, as fractions of the source bounds.
+ *
+ * Every fraction lies between 0 and 1, and the horizontal and the vertical
+ * pair must each leave a visible area.
+ */
+export interface ImageCrop {
+    readonly left: number;
+    readonly top: number;
+    readonly right: number;
+    readonly bottom: number;
+}
+
+/**
+ * Edit operation that points one image element at another embedded asset.
+ *
+ * The asset is addressed by `assetId` or given inline as `asset`; the result
+ * reports the replaced asset, which `asset.prune` can recycle. A non-image
+ * element answers with `object/type-mismatch` and an unknown asset with
+ * `object/not-found`.
+ */
+export interface ImageReplaceOperation {
+    readonly op: 'image.replace';
+    readonly slideId: SlideId;
+    readonly elementId: ElementId;
+    readonly assetId?: AssetId;
+    readonly asset?: AssetInput;
+}
+
+/**
+ * Edit operation that sets the crop box of an image element, or clears it
+ * with `null`.
+ *
+ * Fractions outside 0–1 and pairs that leave no visible area answer with
+ * `session/argument-invalid`; a non-image element answers with
+ * `object/type-mismatch`.
+ */
+export interface ImageSetCropOperation {
+    readonly op: 'image.setCrop';
+    readonly slideId: SlideId;
+    readonly elementId: ElementId;
+    readonly crop: ImageCrop | null;
+}
+
+/**
+ * Edit operation that moves one image element to a zero-based paint index,
+ * optionally onto another slide.
+ *
+ * Without `index` the image is appended and an oversized index is clamped to
+ * the end; the result reports the landing index. A non-image element answers
+ * with `object/type-mismatch` and an unknown target slide with
+ * `object/not-found`.
+ */
+export interface ImageMoveOperation {
+    readonly op: 'image.move';
+    readonly slideId: SlideId;
+    readonly elementId: ElementId;
+    /** Slide that receives the image, default the current slide. */
+    readonly targetSlideId?: SlideId;
+    readonly index?: number;
+}
+
+/**
+ * Edit operation that recycles every embedded asset no element references.
+ *
+ * The edit report lists the removed identities in `prunedAssets`; a deck
+ * without orphans commits the prune without that field.
+ */
+export interface AssetPruneOperation {
+    readonly op: 'asset.prune';
 }
 
 /**
@@ -539,6 +615,17 @@ export interface SlideAppendNotesOperation {
     readonly text: string;
 }
 
+/**
+ * Edit operation that removes the speaker notes of the identified slide.
+ *
+ * Clearing a slide that already has no notes is a no-op; an unknown slide
+ * answers with `object/not-found`.
+ */
+export interface SlideClearNotesOperation {
+    readonly op: 'slide.clearNotes';
+    readonly slideId: SlideId;
+}
+
 /** Element operations of one slide. */
 export interface ElementsApi {
     addText(input: TextElementInput): Promise<Element>;
@@ -559,6 +646,12 @@ export interface ElementsApi {
         elementId: ElementId,
         options?: { readonly toSlideId?: SlideId; readonly offsetX?: number; readonly offsetY?: number },
     ): Promise<Element>;
+    /** Points one image element at another asset; resolves to the replaced asset id. */
+    replaceImage(elementId: ElementId, asset: AssetId | AssetInput): Promise<AssetId>;
+    /** Sets or clears (`null`) the crop box of an image element. */
+    setCrop(elementId: ElementId, crop: ImageCrop | null): Promise<void>;
+    /** Moves one image element, optionally onto another slide; resolves to the landing index. */
+    moveImage(elementId: ElementId, options?: { readonly toSlideId?: SlideId; readonly index?: number }): Promise<number>;
     zOrder(elementId: ElementId, order: ZOrder): Promise<void>;
     lock(elementId: ElementId, flags: LockFlags): Promise<void>;
 }
@@ -604,6 +697,8 @@ export interface SlidesApi {
     move(slideId: SlideId, index: number): Promise<void>;
     duplicate(slideId: SlideId, options?: { readonly index?: number }): Promise<Slide>;
     remove(slideId: SlideId): Promise<void>;
+    /** Removes the speaker notes of one slide. */
+    clearNotes(slideId: SlideId): Promise<void>;
 }
 
 /** Master summary. */
@@ -669,6 +764,8 @@ export interface AssetsApi {
     list(): Promise<readonly AssetInfo[]>;
     add(input: AssetInput): Promise<AssetInfo>;
     remove(assetId: AssetId): Promise<void>;
+    /** Recycles every asset no element references; resolves to the removed ids. */
+    prune(): Promise<readonly AssetId[]>;
 }
 
 /**
