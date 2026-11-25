@@ -42,12 +42,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          lib=$(jq -r 'select(.reason == "compiler-artifact"
-                              and (.package_id | startswith("open-ppt-napi "))
-                              and ([.target.kind[]] | index("cdylib")))
-                      | .filenames[] | select(endswith(".so"))' "$RUNNER_TEMP/cargo-build.json" | head -n 1) || true
+          lib=$(jq -r -n '[inputs
+                          | select(.reason == "compiler-artifact"
+                                   and .target.name == "open_ppt_napi"
+                                   and ([.target.kind[]] | index("cdylib")))
+                          | .filenames[] | select(endswith(".so"))][0] // empty' "$RUNNER_TEMP/cargo-build.json") || true
           if [ -z "$lib" ] || [ ! -f "$lib" ]; then
-            echo "no cdylib artifact found in the cargo build JSON" >&2
+            echo "no cdylib artifact found; artifact targets in the build JSON:" >&2
+            jq -r 'select(.reason == "compiler-artifact")
+                   | "\(.package_id) \(.target.name) \(.target.kind)"' "$RUNNER_TEMP/cargo-build.json" | sort -u >&2
             exit 1
           fi
           staged="target/debug/open_ppt_napi.node"
