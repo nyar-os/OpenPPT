@@ -37,12 +37,29 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
       - name: Build the native binding
-        run: cargo build -p open-ppt-napi
+        run: cargo build -p open-ppt-napi --message-format=json > "$RUNNER_TEMP/cargo-build.json"
       - name: Stage the addon under the extension Node loads
-        run: cp target/debug/libopen_ppt_napi.so target/debug/open_ppt_napi.node
+        shell: bash
+        run: |
+          set -euo pipefail
+          lib=$(jq -r 'select(.reason == "compiler-artifact" and .package.name == "open-ppt-napi"
+                              and ([.target.kind[]] | index("cdylib")))
+                      | .filenames[]' "$RUNNER_TEMP/cargo-build.json" | head -n 1)
+          test -n "$lib" && test "$lib" != "null" && test -f "$lib"
+          staged="target/debug/open_ppt_napi.node"
+          cp "$lib" "$staged"
+          echo "staged cdylib $lib -> $staged"
+      - name: Self-check that Node loads the staged addon
+        run: node -e 'const b = require(process.env.OPEN_PPT_NATIVE); console.log("addon loaded:", b.version());'
+        env:
+          OPEN_PPT_NATIVE: ${{ github.workspace }}/target/debug/open_ppt_napi.node
       - name: Compile the package sources
         run: pnpm --filter @wae/open-ppt run build:test
       - name: Run the review workflow example against the real engine
-        run: pnpm --filter @wae/open-ppt run example
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --filter @wae/open-ppt run example 2>&1 | tee "$RUNNER_TEMP/review-workflow.log"
+          grep -q 'review workflow ok' "$RUNNER_TEMP/review-workflow.log"
         env:
           OPEN_PPT_NATIVE: ${{ github.workspace }}/target/debug/open_ppt_napi.node
