@@ -10,10 +10,11 @@ use data_encoding::representation::Base64;
 
 use crate::base64_text;
 use document_presentation::authored::{
-    AssetId, ChartData, ChartElementInput, Crop, Deck, DeckEdit, DeckError, DeckSize, EMU_PER_POINT, Element, ElementContent, ElementId,
-    Fill, FormulaElementInput, ImageDuplicateOptions, ImageElementInput, ImageMoveTarget, LayoutId, Line, LockFlags, MediaKind,
-    ShapeElementInput, SlideAddOptions, SlideId, TableCell, TableElementInput, TableRow, TextAlign, TextContent, TextElementInput,
-    Transform, codes,
+    AlignEdge, AlignReference, AssetId, ChartData, ChartElementInput, Crop, Deck, DeckEdit, DeckError, DeckSize,
+    DistributeAxis, EMU_PER_POINT, Element, ElementContent, ElementId, ElementZOrder, Fill, FormulaElementInput,
+    ImageDuplicateOptions, ImageElementInput, ImageMoveTarget, LayoutId, Line, LockFlags, MediaKind, ShapeElementInput,
+    SlideAddOptions, SlideId, TableCell, TableElementInput, TableRow, TextAlign, TextContent, TextElementInput,
+    TextReplaceOptions, TextRunStyle, Transform, codes,
 };
 use serde_json::{Value, json};
 
@@ -42,8 +43,9 @@ pub fn edit(deck: &mut Deck, request: &Value) -> Result<Value, ServiceError> {
             let mapped = ServiceError::from(error);
             // The conflict contract contrasts the committed revision against the one this script expected.
             match expected {
-                Some(revision) if mapped.code() == codes::DECK_REVISION_CONFLICT =>
-                    mapped.with_param("expected", Value::from(revision)),
+                Some(revision) if mapped.code() == codes::DECK_REVISION_CONFLICT => {
+                    mapped.with_param("expected", Value::from(revision))
+                }
                 _ => mapped,
             }
         })?;
@@ -62,7 +64,6 @@ pub fn edit(deck: &mut Deck, request: &Value) -> Result<Value, ServiceError> {
 /// cloned, changed and rebuilt so a failure in the closure still consumes no
 /// revision.
 enum Deferred {
-    Reorder { slide: SlideId, element: ElementId, index: usize },
     MoveSlide { slide: SlideId, index: usize },
     SwapSlides { first: SlideId, second: SlideId },
     Background { slide: SlideId, fill: Option<Fill> },
@@ -87,18 +88,6 @@ fn apply_deferred(deck: &mut Deck, deferred: Vec<Deferred>) -> Result<(), Servic
     let mut document = deck.document().clone();
     for operation in deferred {
         match operation {
-            Deferred::Reorder { slide, element, index } => {
-                let Some(model) = document.slides.iter_mut().find(|candidate| candidate.id == slide)
-                else {
-                    continue;
-                };
-                let Some(position) = model.elements.iter().position(|candidate| candidate.id == element)
-                else {
-                    continue;
-                };
-                let moved = model.elements.remove(position);
-                model.elements.insert(index.min(model.elements.len()), moved);
-            }
             Deferred::MoveSlide { slide, index } => {
                 let Some(position) = document.slides.iter().position(|candidate| candidate.id == slide)
                 else {
@@ -389,7 +378,8 @@ impl EditState {
         // resolves `slideId`/`elementId` first and fails with the typed not-found contract instead.
         if let Some(value) = operation.get("slideId").filter(|value| !value.is_null()) {
             let slide = self.slide_id_value(value)?;
-            let Some(model) = draft.document().slide(&slide) else {
+            let Some(model) = draft.document().slide(&slide)
+            else {
                 return Err(missing_slide(&slide));
             };
             if let Some(element_value) = operation.get("elementId").filter(|value| !value.is_null()) {
@@ -440,9 +430,8 @@ impl EditState {
                     else {
                         return Err(invalid("`deck.setSize` needs `ratio`, or both `width` and `height` in points"));
                     };
-                    DeckSize::from_points(width, height).ok_or_else(|| {
-                        invalid("custom slide size must use finite positive point values")
-                    })?
+                    DeckSize::from_points(width, height)
+                        .ok_or_else(|| invalid("custom slide size must use finite positive point values"))?
                 };
                 self.deferred.push(Deferred::SetSize { size });
                 None
@@ -694,14 +683,16 @@ impl EditState {
                 let elements = self.element_list(operation, "elementIds", 1)?;
                 let edge = parse_align_edge(required_str(operation, "edge")?)?;
                 let relative_to = parse_relative_to(operation)?;
-                align_elements(draft, &slide, &elements, edge, relative_to)?;
+                assert_present(draft, &slide, &elements)?;
+                draft.align_elements(&slide, &elements, edge, relative_to)?;
                 None
             }
             "element.distribute" => {
                 let slide = self.slide(operation)?;
                 let elements = self.element_list(operation, "elementIds", 3)?;
                 let axis = parse_distribute_axis(required_str(operation, "axis")?)?;
-                distribute_elements(draft, &slide, &elements, axis)?;
+                assert_present(draft, &slide, &elements)?;
+                draft.distribute_elements(&slide, &elements, axis)?;
                 None
             }
             "element.updateAlt" => {
@@ -719,9 +710,10 @@ impl EditState {
             "element.setTextStyle" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
-                let style = TextStyle::parse(operation, "element.setTextStyle")?;
-                let content = styled_content(draft, &slide, &element, &style)?;
-                draft.set_element_text(&slide, &element, content)?;
+                let style = parse_text_style(operation, "element.setTextStyle")?;
+                draft
+                    .style_text_runs(&slide, &element, &style)
+                    .map_err(|error| text_element_error("element.setTextStyle", error))?;
                 None
             }
             "element.setHyperlink" => {
@@ -733,8 +725,9 @@ impl EditState {
                     Some(Value::String(_)) => return Err(invalid("`url` must be a non-empty string or null")),
                     _ => return Err(invalid("`element.setHyperlink` needs a `url` string or null")),
                 };
-                let content = hyperlink_content(draft, &slide, &element, link)?;
-                draft.set_element_text(&slide, &element, content)?;
+                draft
+                    .set_text_hyperlink(&slide, &element, link)
+                    .map_err(|error| text_element_error("element.setHyperlink", error))?;
                 None
             }
             "element.setFill" => {
@@ -835,7 +828,7 @@ impl EditState {
                 let element = self.element(operation)?;
                 let row = required_usize(operation, "row")?;
                 let column = required_usize(operation, "column")?;
-                let style = TextStyle::parse(operation, "table.setCellStyle")?;
+                let style = parse_text_style(operation, "table.setCellStyle")?;
                 let model = draft.document().slide(&slide).ok_or_else(|| missing_slide(&slide))?;
                 let target = model.element(&element).ok_or_else(|| {
                     DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
@@ -886,10 +879,7 @@ impl EditState {
                 let columns = table.column_widths_emu.len();
                 let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
                 if index > rows.len() {
-                    return Err(invalid(format!(
-                        "`row` {index} is outside the table's insertion points 0..={}",
-                        rows.len()
-                    )));
+                    return Err(invalid(format!("`row` {index} is outside the table's insertion points 0..={}", rows.len())));
                 }
                 if rows.iter().enumerate().any(|(position, row)| {
                     position < index && row.cells.iter().any(|cell| position + cell.row_span as usize > index)
@@ -1129,7 +1119,8 @@ impl EditState {
                     .with_slide(slide.clone())
                     .with_element(element.clone()));
                 };
-                let mut widths = Self::queued_widths(&self.deferred, &slide, &element).unwrap_or_else(|| table.column_widths_emu.clone());
+                let mut widths =
+                    Self::queued_widths(&self.deferred, &slide, &element).unwrap_or_else(|| table.column_widths_emu.clone());
                 let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
                 if index > widths.len() {
                     return Err(invalid(format!(
@@ -1160,9 +1151,7 @@ impl EditState {
                     None => vec![String::new(); rows.len()],
                 };
                 let width_emu = match operation.get("widthPt") {
-                    None | Some(Value::Null) => {
-                        widths.get(index).or_else(|| widths.last()).copied().unwrap_or_default()
-                    }
+                    None | Some(Value::Null) => widths.get(index).or_else(|| widths.last()).copied().unwrap_or_default(),
                     Some(raw) => raw
                         .as_f64()
                         .and_then(document_presentation::authored::points_to_emu)
@@ -1202,7 +1191,8 @@ impl EditState {
                     .with_slide(slide.clone())
                     .with_element(element.clone()));
                 };
-                let mut widths = Self::queued_widths(&self.deferred, &slide, &element).unwrap_or_else(|| table.column_widths_emu.clone());
+                let mut widths =
+                    Self::queued_widths(&self.deferred, &slide, &element).unwrap_or_else(|| table.column_widths_emu.clone());
                 let mut rows = queued_rows(&self.deferred, &slide, &element).unwrap_or_else(|| table.rows.clone());
                 if index >= widths.len() {
                     return Err(invalid(format!("`column` {index} is outside the table's {} columns", widths.len())));
@@ -1352,35 +1342,26 @@ impl EditState {
                         codes::OBJECT_NOT_FOUND,
                         format!("element `{element}` does not exist on this slide"),
                     )
-                    .with_slide(slide)
-                    .with_element(element));
+                    .with_slide(slide.clone())
+                    .with_element(element.clone()));
                 }
                 let index = required_usize(operation, "index")?;
                 if index >= model.elements.len() {
                     return Err(invalid(format!("`index` must be below {} for this slide", model.elements.len())));
                 }
-                self.deferred.push(Deferred::Reorder { slide, element, index });
+                draft.move_element_to(&slide, &element, index)?;
                 None
             }
             "element.bringToFront" | "element.sendToBack" | "element.bringForward" | "element.sendBackward" => {
                 let slide = self.slide(operation)?;
                 let element = self.element(operation)?;
-                let model = draft.document().slide(&slide).ok_or_else(|| {
-                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("slide `{slide}` does not exist")).with_slide(slide.clone())
-                })?;
-                let position = model.elements.iter().position(|candidate| candidate.id == element).ok_or_else(|| {
-                    DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{element}` does not exist on this slide"))
-                        .with_slide(slide.clone())
-                        .with_element(element.clone())
-                })?;
-                let last = model.elements.len().saturating_sub(1);
-                let index = match name {
-                    "element.bringToFront" => last,
-                    "element.sendToBack" => 0,
-                    "element.bringForward" => (position + 1).min(last),
-                    _ => position.saturating_sub(1),
+                let movement = match name {
+                    "element.bringToFront" => ElementZOrder::Front,
+                    "element.sendToBack" => ElementZOrder::Back,
+                    "element.bringForward" => ElementZOrder::Forward,
+                    _ => ElementZOrder::Backward,
                 };
-                self.deferred.push(Deferred::Reorder { slide, element, index });
+                draft.set_element_z_order(&slide, &element, movement)?;
                 None
             }
             "element.remove" => {
@@ -1411,18 +1392,18 @@ impl EditState {
     }
 
     /// The most recently queued column widths for one table, if any.
-fn queued_widths(deferred: &[Deferred], slide: &SlideId, element: &ElementId) -> Option<Vec<i64>> {
-    deferred.iter().rev().find_map(|entry| match entry {
-        Deferred::SetColumnWidths { slide: queued_slide, element: queued_element, widths }
-            if queued_slide == slide && queued_element == element =>
-        {
-            Some(widths.clone())
-        }
-        _ => None,
-    })
-}
+    fn queued_widths(deferred: &[Deferred], slide: &SlideId, element: &ElementId) -> Option<Vec<i64>> {
+        deferred.iter().rev().find_map(|entry| match entry {
+            Deferred::SetColumnWidths { slide: queued_slide, element: queued_element, widths }
+                if queued_slide == slide && queued_element == element =>
+            {
+                Some(widths.clone())
+            }
+            _ => None,
+        })
+    }
 
-/// Queues a table's rebuilt rows, replacing an earlier cell edit on the same
+    /// Queues a table's rebuilt rows, replacing an earlier cell edit on the same
     /// element so several `table.setCell` operations compose in one script.
     fn queue_table_rows(&mut self, slide: SlideId, element: ElementId, rows: Vec<TableRow>) {
         for entry in &mut self.deferred {
@@ -1481,48 +1462,17 @@ fn queued_widths(deferred: &[Deferred], slide: &SlideId, element: &ElementId) ->
             None | Some(Value::Null) => None,
             Some(value) => {
                 let values = value.as_array().ok_or_else(|| invalid("`slideIds` must be an array"))?;
-                let mut ids = BTreeSet::new();
+                let mut ids = Vec::with_capacity(values.len());
                 for item in values {
                     let raw = item.as_str().ok_or_else(|| invalid("`slideIds` must list slide ids"))?;
-                    ids.insert(self.resolve_value(raw)?);
+                    let resolved = self.resolve_value(raw)?;
+                    ids.push(SlideId::new(resolved).ok_or_else(|| invalid("slide identity must not be empty"))?);
                 }
                 Some(ids)
             }
         };
-        let mut replacements = 0_usize;
-        let mut texts = Vec::new();
-        let mut tables = Vec::new();
-        for model in draft.document().slides.iter() {
-            if only.as_ref().is_some_and(|ids| !ids.contains(model.id.as_str())) {
-                continue;
-            }
-            for element in model.elements.iter() {
-                match &element.content {
-                    ElementContent::Text(text) => {
-                        let (next, hits) = replace_in_text(text, find, replace, case_sensitive, whole_word);
-                        if hits > 0 {
-                            replacements += hits;
-                            texts.push((model.id.clone(), element.id.clone(), next));
-                        }
-                    }
-                    ElementContent::Table(table) => {
-                        let (rows, hits) = replace_in_rows(&table.rows, find, replace, case_sensitive, whole_word);
-                        if hits > 0 {
-                            replacements += hits;
-                            tables.push((model.id.clone(), element.id.clone(), rows));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        for (slide, element, text) in texts {
-            draft.set_element_text(&slide, &element, text)?;
-        }
-        for (slide, element, rows) in tables {
-            self.deferred.push(Deferred::TableRows { slide, element, rows });
-        }
-        Ok(replacements.to_string())
+        let hits = draft.replace_text(find, replace, TextReplaceOptions { case_sensitive, whole_word, slides: only })?;
+        Ok(hits.to_string())
     }
 
     fn add_asset(&mut self, draft: &mut DeckEdit, operation: &Value) -> Result<String, DeckError> {
@@ -1705,10 +1655,9 @@ fn queued_widths(deferred: &[Deferred], slide: &SlideId, element: &ElementId) ->
 fn expected_revision(request: &Value) -> Result<Option<u64>, ServiceError> {
     match request.get("expectedRevision") {
         None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_u64()
-            .map(Some)
-            .ok_or_else(|| ServiceError::argument("`expectedRevision` must be a non-negative integer")),
+        Some(value) => {
+            value.as_u64().map(Some).ok_or_else(|| ServiceError::argument("`expectedRevision` must be a non-negative integer"))
+        }
     }
 }
 
@@ -1854,210 +1803,44 @@ fn text_content(value: Option<&Value>) -> Result<TextContent, DeckError> {
     }
 }
 
-/// Rebuilds rich text with every match of `find` replaced inside its runs.
-fn replace_in_text(
-    text: &TextContent,
-    find: &str,
-    replace: &str,
-    case_sensitive: bool,
-    whole_word: bool,
-) -> (TextContent, usize) {
-    let mut text = text.clone();
-    let mut hits = 0_usize;
-    for paragraph in &mut text.paragraphs {
-        for run in &mut paragraph.runs {
-            let (next, count) = replace_matches(&run.text, find, replace, case_sensitive, whole_word);
-            if count > 0 {
-                run.text = next;
-                hits += count;
-            }
-        }
-    }
-    (text, hits)
-}
-
-/// Rebuilds table rows with every match of `find` replaced inside the cell texts.
-fn replace_in_rows(
-    rows: &[TableRow],
-    find: &str,
-    replace: &str,
-    case_sensitive: bool,
-    whole_word: bool,
-) -> (Vec<TableRow>, usize) {
-    let mut rows = rows.to_vec();
-    let mut hits = 0_usize;
-    for row in &mut rows {
-        for cell in &mut row.cells {
-            let (next, count) = replace_in_text(&cell.text, find, replace, case_sensitive, whole_word);
-            if count > 0 {
-                cell.text = next;
-                hits += count;
-            }
-        }
-    }
-    (rows, hits)
-}
-
-/// Replaces non-overlapping matches of `find` in one run of text.
+/// Parses the run-style properties shared by `element.setTextStyle` and `table.setCellStyle`.
 ///
-/// Matching mirrors the search options: case folding compares characters, and
-/// `whole_word` refuses matches that touch a letter, digit or underscore.
-fn replace_matches(text: &str, find: &str, replace: &str, case_sensitive: bool, whole_word: bool) -> (String, usize) {
-    let needle = find.chars().collect::<Vec<_>>();
-    if text.is_empty() || needle.is_empty() {
-        return (text.to_string(), 0);
-    }
-    let haystack = text.chars().collect::<Vec<_>>();
-    let mut output = String::with_capacity(text.len());
-    let mut cursor = 0_usize;
-    let mut hits = 0_usize;
-    while cursor < haystack.len() {
-        let matched = matches_at(&haystack, cursor, &needle, case_sensitive)
-            && !(whole_word && touches_word_char(&haystack, cursor, needle.len()));
-        if matched {
-            output.push_str(replace);
-            cursor += needle.len();
-            hits += 1;
-        }
-        else {
-            output.push(haystack[cursor]);
-            cursor += 1;
-        }
-    }
-    (output, hits)
-}
-
-/// Whether `needle` starts at `start` in `haystack` under the case option.
-fn matches_at(haystack: &[char], start: usize, needle: &[char], case_sensitive: bool) -> bool {
-    haystack.len() >= start + needle.len()
-        && haystack[start..]
-            .iter()
-            .zip(needle)
-            .all(|(found, wanted)| found == wanted || (!case_sensitive && found.to_lowercase().eq(wanted.to_lowercase())))
-}
-
-/// Whether the characters around a match are letters, digits or underscores.
-fn touches_word_char(text: &[char], start: usize, length: usize) -> bool {
-    let before = if start == 0 { None } else { Some(text[start - 1]) };
-    let after = text.get(start + length).copied();
-    is_word_char(before) || is_word_char(after)
-}
-
-fn is_word_char(value: Option<char>) -> bool {
-    value.is_some_and(|character| character.is_alphanumeric() || character == '_')
-}
-
-/// Run-level styling applied by `element.setTextStyle`.
-///
-/// Every set field is written onto every run of the element; omitted or `null`
-/// fields keep the run's current value.
-struct TextStyle {
-    bold: Option<bool>,
-    italic: Option<bool>,
-    underline: Option<bool>,
-    strike: Option<bool>,
-    size_pt: Option<f64>,
-    color: Option<String>,
-    font_family: Option<String>,
-    align: Option<TextAlign>,
-}
-
-impl TextStyle {
-    fn parse(operation: &Value, operation_name: &str) -> Result<Self, DeckError> {
-        let style = Self {
-            bold: optional_bool(operation, "bold")?,
-            italic: optional_bool(operation, "italic")?,
-            underline: optional_bool(operation, "underline")?,
-            strike: optional_bool(operation, "strike")?,
-            size_pt: optional_font_size(operation)?,
-            color: optional_hex_color(operation)?,
-            font_family: optional_string(operation, "fontFamily")?.filter(|family| !family.trim().is_empty()),
-            align: optional_text_align(operation)?,
-        };
-        if style.bold.is_none()
-            && style.italic.is_none()
-            && style.underline.is_none()
-            && style.strike.is_none()
-            && style.size_pt.is_none()
-            && style.color.is_none()
-            && style.font_family.is_none()
-            && style.align.is_none()
-        {
-            return Err(invalid(format!("`{operation_name}` needs at least one style property")));
-        }
-        Ok(style)
-    }
-}
-
-/// Clones the element's rich text and stamps the requested style onto every run.
-fn styled_content(draft: &DeckEdit, slide: &SlideId, element: &ElementId, style: &TextStyle) -> Result<TextContent, DeckError> {
-    let model = draft.document().slide(slide).ok_or_else(|| missing_slide(slide))?;
-    let target = model.element(element).ok_or_else(|| {
-        DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{}` does not exist on this slide", element.as_str()))
-            .with_slide(slide.clone())
-            .with_element(element.clone())
-    })?;
-    let ElementContent::Text(text) = &target.content
-    else {
-        return Err(invalid("`element.setTextStyle` needs a text element"));
+/// The typed style itself lives upstream; this surface only maps JSON keys and
+/// keeps the stable "needs at least one style property" rejection.
+fn parse_text_style(operation: &Value, operation_name: &str) -> Result<TextRunStyle, DeckError> {
+    let style = TextRunStyle {
+        bold: optional_bool(operation, "bold")?,
+        italic: optional_bool(operation, "italic")?,
+        underline: optional_bool(operation, "underline")?,
+        strike: optional_bool(operation, "strike")?,
+        size_pt: optional_font_size(operation)?,
+        color: optional_hex_color(operation)?,
+        font_family: optional_string(operation, "fontFamily")?.filter(|family| !family.trim().is_empty()),
+        align: optional_text_align(operation)?,
     };
-    let mut text = text.clone();
-    style.apply(&mut text);
-    Ok(text)
+    if style.is_empty() {
+        return Err(invalid(format!("`{operation_name}` needs at least one style property")));
+    }
+    Ok(style)
 }
 
-fn hyperlink_content(draft: &DeckEdit, slide: &SlideId, element: &ElementId, link: Option<String>) -> Result<TextContent, DeckError> {
+/// Maps the upstream type mismatch onto the stable argument error of these two operations.
+fn text_element_error(operation_name: &str, error: DeckError) -> DeckError {
+    match error.code() {
+        codes::OBJECT_TYPE_MISMATCH => invalid(format!("`{operation_name}` needs a text element")),
+        _ => error,
+    }
+}
+
+/// The script surface refuses unknown layout targets as an argument error.
+fn assert_present(draft: &DeckEdit, slide: &SlideId, elements: &[ElementId]) -> Result<(), DeckError> {
     let model = draft.document().slide(slide).ok_or_else(|| missing_slide(slide))?;
-    let target = model.element(element).ok_or_else(|| {
-        DeckError::new(codes::OBJECT_NOT_FOUND, format!("element `{}` does not exist on this slide", element.as_str()))
-            .with_slide(slide.clone())
-            .with_element(element.clone())
-    })?;
-    let ElementContent::Text(text) = &target.content
-    else {
-        return Err(invalid("`element.setHyperlink` needs a text element"));
-    };
-    let mut text = text.clone();
-    for paragraph in &mut text.paragraphs {
-        for run in &mut paragraph.runs {
-            run.hyperlink = link.clone();
+    for id in elements {
+        if model.element(id).is_none() {
+            return Err(unknown_element(slide, id));
         }
     }
-    Ok(text)
-}
-
-impl TextStyle {
-    /// Stamps every set property onto every run of `text`.
-    fn apply(&self, text: &mut TextContent) {
-        for paragraph in &mut text.paragraphs {
-            if let Some(value) = self.align {
-                paragraph.align = Some(value);
-            }
-            for run in &mut paragraph.runs {
-                if let Some(value) = self.bold {
-                    run.bold = Some(value);
-                }
-                if let Some(value) = self.italic {
-                    run.italic = Some(value);
-                }
-                if let Some(value) = self.underline {
-                    run.underline = Some(value);
-                }
-                if let Some(value) = self.strike {
-                    run.strike = Some(value);
-                }
-                if let Some(value) = self.size_pt {
-                    run.size_pt = Some(value);
-                }
-                if let Some(value) = &self.color {
-                    run.color = Some(value.clone());
-                }
-                if let Some(value) = &self.font_family {
-                    run.font_family = Some(value.clone());
-                }
-            }
-        }
-    }
+    Ok(())
 }
 
 fn optional_bool(operation: &Value, key: &str) -> Result<Option<bool>, DeckError> {
@@ -2115,17 +1898,7 @@ fn required_transform(operation: &Value) -> Result<Transform, DeckError> {
     Ok(transform)
 }
 
-/// One alignment edge; only the axis that belongs to it moves.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AlignEdge {
-    Left,
-    Center,
-    Right,
-    Top,
-    Middle,
-    Bottom,
-}
-
+/// Maps the JSON edge name onto the upstream alignment edge.
 fn parse_align_edge(value: &str) -> Result<AlignEdge, DeckError> {
     Ok(match value {
         "left" => AlignEdge::Left,
@@ -2142,67 +1915,23 @@ fn parse_align_edge(value: &str) -> Result<AlignEdge, DeckError> {
     })
 }
 
-/// Reference frame of an alignment run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RelativeTo {
-    Slide,
-    Selection,
-}
-
-fn parse_relative_to(operation: &Value) -> Result<RelativeTo, DeckError> {
+/// Maps the JSON reference frame onto the upstream alignment reference.
+fn parse_relative_to(operation: &Value) -> Result<AlignReference, DeckError> {
     match operation.get("relativeTo") {
-        None | Some(Value::Null) => Ok(RelativeTo::Slide),
-        Some(Value::String(value)) if value == "slide" => Ok(RelativeTo::Slide),
-        Some(Value::String(value)) if value == "selection" => Ok(RelativeTo::Selection),
+        None | Some(Value::Null) => Ok(AlignReference::Slide),
+        Some(Value::String(value)) if value == "slide" => Ok(AlignReference::Slide),
+        Some(Value::String(value)) if value == "selection" => Ok(AlignReference::Selection),
         Some(_) => Err(invalid("`relativeTo` must be `slide` or `selection`")),
     }
 }
 
-/// Axis along which elements are distributed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DistributeAxis {
-    Horizontal,
-    Vertical,
-}
-
+/// Maps the JSON axis name onto the upstream distribution axis.
 fn parse_distribute_axis(value: &str) -> Result<DistributeAxis, DeckError> {
     match value {
         "horizontal" => Ok(DistributeAxis::Horizontal),
         "vertical" => Ok(DistributeAxis::Vertical),
         other => Err(invalid(format!("`axis` must be `horizontal` or `vertical`, not `{other}`"))),
     }
-}
-
-impl DistributeAxis {
-    fn start(self, transform: &Transform) -> i64 {
-        match self {
-            Self::Horizontal => transform.x_emu,
-            Self::Vertical => transform.y_emu,
-        }
-    }
-
-    fn set_start(self, transform: &mut Transform, value: i64) {
-        match self {
-            Self::Horizontal => transform.x_emu = value,
-            Self::Vertical => transform.y_emu = value,
-        }
-    }
-
-    fn size(self, transform: &Transform) -> i64 {
-        match self {
-            Self::Horizontal => transform.width_emu,
-            Self::Vertical => transform.height_emu,
-        }
-    }
-}
-
-/// Frame positions are computed from one snapshot, then written in one pass.
-#[derive(Debug, Clone, Copy)]
-struct Bounds {
-    x: i64,
-    y: i64,
-    width: i64,
-    height: i64,
 }
 
 fn missing_slide(slide: &SlideId) -> DeckError {
@@ -2240,112 +1969,9 @@ fn asset_error(error: DeckError) -> DeckError {
 /// Reads the four crop fractions; the upstream setter validates their range.
 fn parse_crop(value: &Value) -> Result<Crop, DeckError> {
     let fraction = |key: &str| {
-        value
-            .get(key)
-            .and_then(Value::as_f64)
-            .ok_or_else(|| invalid(format!("`crop.{key}` must be a number between 0 and 1")))
+        value.get(key).and_then(Value::as_f64).ok_or_else(|| invalid(format!("`crop.{key}` must be a number between 0 and 1")))
     };
     Ok(Crop { left: fraction("left")?, top: fraction("top")?, right: fraction("right")?, bottom: fraction("bottom")? })
-}
-
-fn element_frames(draft: &DeckEdit, slide: &SlideId, elements: &[ElementId]) -> Result<Vec<Transform>, DeckError> {
-    let model = draft.document().slide(slide).ok_or_else(|| missing_slide(slide))?;
-    elements
-        .iter()
-        .map(|id| model.element(id).map(|element| element.transform).ok_or_else(|| unknown_element(slide, id)))
-        .collect()
-}
-
-fn selection_bounds(frames: &[Transform]) -> Bounds {
-    let mut x = i64::MAX;
-    let mut y = i64::MAX;
-    let mut right = i64::MIN;
-    let mut bottom = i64::MIN;
-    for transform in frames {
-        x = x.min(transform.x_emu);
-        y = y.min(transform.y_emu);
-        right = right.max(transform.x_emu.saturating_add(transform.width_emu));
-        bottom = bottom.max(transform.y_emu.saturating_add(transform.height_emu));
-    }
-    Bounds { x, y, width: right.saturating_sub(x), height: bottom.saturating_sub(y) }
-}
-
-/// Aligns the selected boxes to the slide or to their joint bounding box.
-fn align_elements(
-    draft: &mut DeckEdit,
-    slide: &SlideId,
-    elements: &[ElementId],
-    edge: AlignEdge,
-    relative_to: RelativeTo,
-) -> Result<(), DeckError> {
-    let frames = element_frames(draft, slide, elements)?;
-    let bounds = match relative_to {
-        RelativeTo::Slide => {
-            let size = draft.document().size;
-            Bounds { x: 0, y: 0, width: size.width_emu, height: size.height_emu }
-        }
-        RelativeTo::Selection => selection_bounds(&frames),
-    };
-    let updates = elements
-        .iter()
-        .zip(frames)
-        .map(|(id, transform)| {
-            let mut next = transform;
-            match edge {
-                AlignEdge::Left => next.x_emu = bounds.x,
-                AlignEdge::Center => next.x_emu = bounds.x + (bounds.width - next.width_emu) / 2,
-                AlignEdge::Right => next.x_emu = bounds.x + bounds.width - next.width_emu,
-                AlignEdge::Top => next.y_emu = bounds.y,
-                AlignEdge::Middle => next.y_emu = bounds.y + (bounds.height - next.height_emu) / 2,
-                AlignEdge::Bottom => next.y_emu = bounds.y + bounds.height - next.height_emu,
-            }
-            (id.clone(), next)
-        })
-        .collect::<Vec<_>>();
-    for (id, transform) in updates {
-        draft.update_transform(slide, &id, transform)?;
-    }
-    Ok(())
-}
-
-/// Spaces the middle boxes evenly between the fixed first and last boxes.
-fn distribute_elements(
-    draft: &mut DeckEdit,
-    slide: &SlideId,
-    elements: &[ElementId],
-    axis: DistributeAxis,
-) -> Result<(), DeckError> {
-    let frames = element_frames(draft, slide, elements)?;
-    let mut ordered = elements
-        .iter()
-        .cloned()
-        .zip(frames)
-        .enumerate()
-        .map(|(index, (id, transform))| (axis.start(&transform), index, id, transform))
-        .collect::<Vec<_>>();
-    ordered.sort_by_key(|(start, index, _, _)| (*start, *index));
-
-    let start = ordered.first().map_or(0, |(start, _, _, _)| *start);
-    let end = ordered.last().map_or(start, |(_, _, _, transform)| axis.start(transform).saturating_add(axis.size(transform)));
-    let total = ordered.iter().map(|(_, _, _, transform)| axis.size(transform)).sum::<i64>();
-    let gaps = (ordered.len() - 1) as i64;
-    let spacing = end.saturating_sub(start).saturating_sub(total) / gaps;
-
-    let last = ordered.len() - 1;
-    let mut cursor = start;
-    let mut updates = Vec::with_capacity(last.saturating_sub(1));
-    for (position, (_, _, id, transform)) in ordered.iter().enumerate() {
-        if position != 0 && position != last {
-            let mut next = *transform;
-            axis.set_start(&mut next, cursor);
-            updates.push((id.clone(), next));
-        }
-        cursor = cursor.saturating_add(axis.size(transform)).saturating_add(spacing);
-    }
-    for (id, transform) in updates {
-        draft.update_transform(slide, &id, transform)?;
-    }
-    Ok(())
 }
 
 fn transform_value(transform: Transform) -> Value {
@@ -2525,4 +2151,3 @@ fn element_text(element: &document_presentation::authored::Element) -> Option<St
         _ => None,
     }
 }
-
